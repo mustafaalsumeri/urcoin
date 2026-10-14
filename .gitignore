@@ -1,0 +1,17 @@
+# Ur Coin Wallet & Private Keys (NEVER PUSH TO PUBLIC GITHUB)
+urcoin_wallet.json
+new_urcoin_wallet.json
+*.key
+
+# Local Blockchain Databases
+*.db
+*.db-journal
+*.db-wal
+
+# Python caches
+__pycache__/
+*.pyc
+
+# Backups & Zips
+*.zip
+UrCoin_Backups/
