@@ -1,10 +1,11 @@
 """
 Ur Coin (URC) - JSON-RPC Server & Web Explorer Dashboard
-Secure Thread-Safe Version
+Professional Thread-Safe Version with Advanced Cyberpunk UI
 """
 
 import os
 import json
+import time
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
@@ -12,162 +13,200 @@ from core import Block, Transaction, TxIn, TxOut
 
 class UrCoinRPCHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
-        # تعطيل طباعة الطلبات الكثيرة في الـ Terminal للحفاظ على نظافة الشاشة
+        # تعطيل طباعة طلبات الويب للحفاظ على نظافة الـ Terminal
         return
 
     def do_GET(self):
         parsed_url = urlparse(self.path)
         path = parsed_url.path
 
-        # 1. مستكشف البلوكشين الرئيسي (Web Explorer)
+        # 1. مستكشف البلوكشين الرئيسي المطور (Professional Web Explorer Dashboard)
         if path == "/" or path == "/index.html":
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
             
-            # قراءة حية وآمنة لحالة الشبكة باستخدام القفل البرمجي
+            # استعلام آمن ومحمي باستخدام القفل البرمجي للشبكة
             with self.server.db_lock:
                 best_height = self.server.storage.get_best_height()
                 best_block = self.server.storage.get_best_block()
+                mempool_count = len(self.server.mempool.transactions) if hasattr(self.server.mempool, 'transactions') else 0
+                circulating_supply = (best_height + 1) * 50  # مكافأة الـ 50 URC لكل كتلة
             
-            balance = 0
+            balance = 0.0
             address = "None"
             if self.server.wallet:
                 address = self.server.wallet.address
                 with self.server.db_lock:
                     balance = self.server.storage.get_balance(address)
 
+            # بناء الواجهة الهندسية المحدثة بالكامل المتوافقة مع أداء الـ RTX 3050
             html = f"""
             <!DOCTYPE html>
-            <html>
+            <html lang="ar" dir="rtl">
             <head>
-                <title>Ur Coin (URC) Explorer</title>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>Ur Coin (URC) - لوحة التحكم الاحترافية</title>
                 <style>
-                    body {{ background-color: #121212; color: #ffffff; font-family: sans-serif; padding: 20px; }}
-                    .card {{ background-color: #1e1e1e; padding: 20px; margin-bottom: 15px; border-radius: 8px; border: 1px solid #333; }}
-                    h1 {{ color: #00ffcc; }}
-                    .btn {{ background-color: #00ffcc; color: #000; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; }}
+                    :root {{
+                        --bg-main: #0b0f19;
+                        --bg-card: #151d30;
+                        --neon-green: #00ffcc;
+                        --neon-blue: #00bfff;
+                        --text-main: #f1f5f9;
+                        --text-muted: #94a3b8;
+                        --border-color: #243454;
+                    }}
+                    body {{
+                        background-color: var(--bg-main);
+                        color: var(--text-main);
+                        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                        margin: 0;
+                        padding: 30px;
+                    }}
+                    .container {{ max-width: 1200px; margin: 0 auto; }}
+                    header {{
+                        display: flex;
+                        justify-content: space-between;
+                        align-items: center;
+                        border-bottom: 2px solid var(--border-color);
+                        padding-bottom: 20px;
+                        margin-bottom: 30px;
+                    }}
+                    h1 {{ color: var(--neon-green); margin: 0; font-size: 28px; text-shadow: 0 0 10px rgba(0,255,204,0.2); }}
+                    .status-badge {{
+                        background: rgba(0, 255, 204, 0.1);
+                        border: 1px solid var(--neon-green);
+                        color: var(--neon-green);
+                        padding: 6px 16px;
+                        border-radius: 20px;
+                        font-weight: bold;
+                        font-size: 14px;
+                    }}
+                    .grid-stats {{
+                        display: grid;
+                        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+                        gap: 20px;
+                        margin-bottom: 30px;
+                    }}
+                    .stat-card {{
+                        background: var(--bg-card);
+                        border: 1px solid var(--border-color);
+                        padding: 20px;
+                        border-radius: 12px;
+                        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+                    }}
+                    .stat-card h3 {{ color: var(--text-muted); margin: 0 0 10px 0; font-size: 14px; text-transform: uppercase; }}
+                    .stat-card p {{ margin: 0; font-size: 22px; font-weight: bold; color: var(--neon-blue); }}
+                    
+                    .section-title {{ color: var(--neon-green); font-size: 20px; margin: 30px 0 15px 0; display: flex; align-items: center; gap: 10px; }}
+                    
+                    .wallet-box {{
+                        background: linear-gradient(135deg, #151d30 0%, #1e2942 100%);
+                        border: 1px solid var(--border-color);
+                        padding: 25px;
+                        border-radius: 16px;
+                        display: flex;
+                        justify-content: space-between;
+                        flex-wrap: wrap;
+                        gap: 20px;
+                    }}
+                    .wallet-info {{ flex: 1; min-width: 280px; }}
+                    .address-bar {{
+                        background: rgba(0,0,0,0.3);
+                        padding: 12px;
+                        border-radius: 8px;
+                        border: 1px solid var(--border-color);
+                        color: var(--neon-green);
+                        font-family: monospace;
+                        font-size: 15px;
+                        display: block;
+                        margin-top: 8px;
+                        cursor: pointer;
+                        text-align: center;
+                    }}
+                    .transfer-form {{
+                        flex: 1;
+                        min-width: 280px;
+                        background: rgba(0,0,0,0.2);
+                        padding: 20px;
+                        border-radius: 12px;
+                        border: 1px solid var(--border-color);
+                    }}
+                    .form-group {{ margin-bottom: 15px; }}
+                    .form-group label {{ display: block; margin-bottom: 5px; color: var(--text-muted); font-size: 14px; }}
+                    .form-control {{
+                        width: 100%;
+                        background: var(--bg-main);
+                        border: 1px solid var(--border-color);
+                        padding: 10px;
+                        border-radius: 6px;
+                        color: #fff;
+                        box-sizing: border-box;
+                    }}
+                    .form-control:focus {{ border-color: var(--neon-blue); outline: none; }}
+                    .btn-send {{
+                        width: 100%;
+                        background: var(--neon-green);
+                        color: #000;
+                        padding: 12px;
+                        border: none;
+                        border-radius: 6px;
+                        font-weight: bold;
+                        cursor: pointer;
+                        font-size: 16px;
+                        transition: all 0.2s;
+                    }}
+                    .btn-send:hover {{ background: #00cc66; box-shadow: 0 0 15px rgba(0,255,204,0.4); }}
+                    
+                    table {{
+                        width: 100%;
+                        border-collapse: collapse;
+                        background: var(--bg-card);
+                        border-radius: 12px;
+                        overflow: hidden;
+                        border: 1px solid var(--border-color);
+                    }}
+                    th, td {{ padding: 14px 20px; text-align: right; border-bottom: 1px solid var(--border-color); }}
+                    th {{ background-color: rgba(0, 191, 255, 0.1); color: var(--neon-blue); font-weight: 600; }}
+                    tr:hover {{ background-color: rgba(255,255,255,0.02); }}
+                    .tx-count {{
+                        background: rgba(0, 191, 255, 0.15);
+                        color: var(--neon-blue);
+                        padding: 2px 8px;
+                        border-radius: 4px;
+                        font-size: 13px;
+                    }}
+                    .hash-code {{ font-family: monospace; color: var(--text-muted); font-size: 14px; word-break: break-all; }}
                 </style>
+                <script>
+                    function copyAddress() {{
+                        var addressText = document.getElementById("walletAddress").innerText;
+                        navigator.clipboard.writeText(addressText);
+                        alert("تم نسخ عنوان محفظتك بنجاح: " + addressText);
+                    }}
+                    function confirmTransaction(e) {{
+                        if(!confirm("هل أنت متأكد من رغبتك في بث هذه المعاملة المالية وإرسال العملات؟")) {{
+                            e.preventDefault();
+                        }}
+                    }}
+                </script>
             </head>
             <body>
-                <h1>🪙 لوحة تحكم عملة أور الرقمية | Ur Coin Dashboard</h1>
-                <div class="card">
-                    <h3>📊 حالة الشبكة العامة (Network Status)</h3>
-                    <p><b>ارتفاع البلوكشين الحالي:</b> #{best_height}</p>
-                    <p><b>هاش آخر كتلة:</b> {best_block.hash if best_block else 'None'}</p>
-                </div>
-                <div class="card">
-                    <h3>👛 محفظة العقدة المحلية (Node Wallet)</h3>
-                    <p><b>عنوان الاستقبال:</b> <code style="color:#00ffcc;">{address}</code></p>
-                    <p><b>الرصيد الإجمالي:</b> {balance:.8f} URC</p>
-                </div>
-            </body>
-            </html>
-            """
-            self.wfile.write(html.encode('utf-8'))
-            return
+                <div class="container">
+                    <header>
+                        <div>
+                            <h1>🪙 لوحة تحكم عملة أور الرقمية | Ur Coin Explorer</h1>
+                            <p style="color: var(--text-muted); margin: 5px 0 0 0;">شبكة بلوكشين مستقلة (Layer-1) مخصصة لكروت الشاشة متوسطة الذاكرة</p>
+                        </div>
+                        <div class="status-badge">● العقدة متصلة وحية (MAINNET)</div>
+                    </header>
 
-        # 2. مستكشف الكتل البرمجي (API Blocks)
-        elif path == "/api/blocks":
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            
-            with self.server.db_lock:
-                height = self.server.storage.get_best_height()
-                blocks_data = []
-                # جلب آخر 10 كتل بأمان
-                start = max(0, height - 10)
-                for h in range(start, height + 1):
-                    b = self.server.storage.get_block_by_height(h)
-                    if b:
-                        blocks_data.append({{"height": b.header.height, "hash": b.hash, "tx_count": len(b.transactions)}})
-            
-            self.wfile.write(json.dumps(blocks_data).encode('utf-8'))
-            return
-
-        else:
-            self.send_error(404, "File Not Found")
-
-    def do_POST(self):
-        # معالجة طلبات الـ JSON-RPC من سطر الأوامر والتعدين
-        if self.path == "/rpc" or self.path == "/":
-            content_length = int(self.headers['Content-Length'])
-            post_data = self.rfile.read(content_length)
-            
-            try:
-                req = json.loads(post_data.decode('utf-8'))
-                method = req.get("method")
-                params = req.get("params", [])
-                
-                result = None
-                error = None
-
-                # استخدام قفل الحماية لجميع عمليات الـ RPC لضمان عدم تداخل البيانات
-                with self.server.db_lock:
-                    if method == "get_chain_info":
-                        result = {
-                            "height": self.server.storage.get_best_height(),
-                            "best_hash": self.server.storage.get_best_block().hash if self.server.storage.get_best_block() else ""
-                        }
-                    elif method == "get_balance":
-                        addr = params[0] if params else ""
-                        result = self.server.storage.get_balance(addr)
-                    elif method == "submit_block":
-                        # استقبال كتلة جديدة من المعدّن وبثها
-                        block_dict = params[0]
-                        block = Block.from_dict(block_dict)
-                        if block.verify_pow():
-                            self.server.storage.add_block(block)
-                            if self.server.p2p:
-                                self.server.p2p.broadcast_block(block)
-                            result = "SUCCESS"
-                        else:
-                            error = "INVALID_POW"
-                    else:
-                        error = "UNKNOWN_METHOD"
-
-                response = {"result": result, "error": error, "id": req.get("id")}
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                self.wfile.write(json.dumps(response).encode('utf-8'))
-                
-            except Exception as e:
-                self.send_error(500, str(e))
-
-
-class UrCoinRPCServer:
-    def __init__(self, storage, mempool, p2p, wallet, host="0.0.0.0", port=9334, db_lock=None):
-        self.storage = storage
-        self.mempool = mempool
-        self.p2p = p2p
-        self.wallet = wallet
-        self.host = host
-        self.port = port
-        # 🟥 إذا لم يمرر قفل، ننشئ واحداً افتراضياً لمنع حدوث خطأ برمي
-        self.db_lock = db_lock if db_lock else threading.Lock()
-        
-        # حماية قراءة عنوان المحفظة بوضع شرط ذكي
-        if self.wallet:
-            self.reward_address = self.wallet.address
-        else:
-            self.reward_address = "None"
-
-        self.httpd = HTTPServer((self.host, self.port), UrCoinRPCHandler)
-        # ربط الكائنات بالخادم لكي يتمكن الـ Handler من قراءتها بأمان
-        self.httpd.storage = self.storage
-        self.httpd.mempool = self.mempool
-        self.httpd.p2p = self.p2p
-        self.httpd.wallet = self.wallet
-        self.httpd.db_lock = self.db_lock
-
-    def start(self):
-        self.server_thread = threading.Thread(target=self.httpd.serve_forever)
-        self.server_thread.daemon = True
-        self.server_thread.start()
-        print(f"[RPC] Thread-Safe RPC Server active on Address http://{self.host}:{self.port}/")
-
-    def stop(self):
-        self.httpd.shutdown()
-        self.httpd.server_close()
+                    <div class="grid-stats">
+                        <div class="stat-card">
+                            <h3>ارتفاع البلوكشين (Height)</h3>
+                            <p>#{best_height}</p>
+                        </div>
+                        <div class="stat-card">
+                            <h3>المعروض المتداول (Supply)</h3>
