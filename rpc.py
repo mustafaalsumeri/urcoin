@@ -1,6 +1,6 @@
 """
-Ur Coin (URC) - Secure Web Hot Wallet & Explorer Daemon
-Enterprise Thread-Safe Cloud Engine [2026 Update]
+Ur Coin (URC) - Stable JSON-RPC Server & Web Explorer Daemon
+Professional Isolated Production Engine - Clean Version
 """
 
 import os
@@ -19,12 +19,20 @@ class UrCoinRPCHandler(BaseHTTPRequestHandler):
         parsed_url = urlparse(self.path)
         path = parsed_url.path
 
-        # 1. بوابة محفظة الإنترنت الساخنة ومستكشف الشبكة المباشر
+        # تخديم صفحة الويب من ملف خارجي مستقل تماماً لمنع أخطاء السنتكس
         if path == "/" or path == "/index.html":
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
             
+            # إذا لم يجد ملف الواجهة الخارجي، يعرض واجهة طوارئ خفيفة جداً
+            if not os.path.exists("index.html"):
+                self.wfile.write(b"<h1>Ur Coin Node Running - index.html missing</h1>")
+                return
+                
+            with open("index.html", "r", encoding="utf-8") as f:
+                html_template = f.read()
+                
             with self.server.db_lock:
                 best_height = self.server.storage.get_best_height()
                 best_block = self.server.storage.get_best_block()
@@ -38,164 +46,134 @@ class UrCoinRPCHandler(BaseHTTPRequestHandler):
                 with self.server.db_lock:
                     balance = self.server.storage.get_balance(address)
 
-            html = f"""
-            <!DOCTYPE html>
-            <html lang="ar" dir="rtl">
-            <head>
-                <meta charset="UTF-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <title>Ur Coin (URC) - محفظة الإنترنت الساخنة الرسمية</title>
-                <style>
-                    :root {{
-                        --bg-main: #060913;
-                        --bg-card: #0f1626;
-                        --neon-gold: #f59e0b;
-                        --neon-blue: #3b82f6;
-                        --text-main: #f8fafc;
-                        --text-muted: #64748b;
-                        --border: #1e293b;
-                    }}
-                    body {{
-                        background-color: var(--bg-main);
-                        color: var(--text-main);
-                        font-family: 'system-ui', -apple-system, sans-serif;
-                        margin: 0;
-                        padding: 30px 15px;
-                    }}
-                    .container {{ max-width: 1000px; margin: 0 auto; }}
-                    header {{
-                        background: var(--bg-card);
-                        padding: 25px;
-                        border-radius: 20px;
-                        border: 1px solid var(--border);
-                        display: flex;
-                        justify-content: space-between;
-                        align-items: center;
-                        margin-bottom: 30px;
-                    }}
-                    h1 {{ color: var(--neon-gold); margin: 0; font-size: 26px; text-shadow: 0 0 15px rgba(245,158,11,0.2); }}
-                    .hot-badge {{
-                        background: rgba(245, 158, 11, 0.08);
-                        border: 1px solid var(--neon-gold);
-                        color: var(--neon-gold);
-                        padding: 6px 14px;
-                        border-radius: 30px;
-                        font-weight: 700;
-                        font-size: 12px;
-                    }}
-                    .wallet-grid {{
-                        display: grid;
-                        grid-template-columns: 1fr 1fr;
-                        gap: 25px;
-                        margin-bottom: 30px;
-                    }}
-                    @media (max-width: 768px) {{ .wallet-grid {{ grid-template-columns: 1fr; }} }}
-                    .wallet-card {{
-                        background: var(--bg-card);
-                        border: 1px solid var(--border);
-                        padding: 30px;
-                        border-radius: 20px;
-                        box-shadow: 0 10px 25px rgba(0,0,0,0.3);
-                    }}
-                    .address-box {{
-                        background: #020617;
-                        padding: 14px;
-                        border-radius: 10px;
-                        border: 1px solid var(--border);
-                        color: var(--neon-gold);
-                        font-family: monospace;
-                        font-size: 13px;
-                        text-align: center;
-                        cursor: pointer;
-                        word-break: break-all;
-                        margin-top: 15px;
-                    }}
-                    .form-group {{ margin-bottom: 20px; }}
-                    .form-group label {{ display: block; margin-bottom: 8px; color: var(--text-muted); font-size: 13px; }}
-                    .input-field {{
-                        width: 100%;
-                        background: #020617;
-                        border: 1px solid var(--border);
-                        padding: 12px 16px;
-                        border-radius: 8px;
-                        color: #fff;
-                        box-sizing: border-box;
-                    }}
-                    .btn-action {{
-                        width: 100%;
-                        background: var(--neon-gold);
-                        color: #000;
-                        padding: 14px;
-                        border: none;
-                        border-radius: 8px;
-                        font-weight: 800;
-                        cursor: pointer;
-                        font-size: 16px;
-                    }}
-                    .btn-action:hover {{ opacity: 0.9; box-shadow: 0 0 20px rgba(245,158,11,0.3); }}
-                    
-                    table {{ width: 100%; border-collapse: collapse; background: var(--bg-card); border-radius: 16px; overflow: hidden; border: 1px solid var(--border); }}
-                    th, td {{ padding: 14px 20px; text-align: right; border-bottom: 1px solid var(--border); }}
-                    th {{ background-color: rgba(245, 158, 11, 0.03); color: var(--neon-gold); font-size: 13px; }}
-                    .hash-style {{ font-family: monospace; color: var(--text-muted); font-size: 13px; word-break: break-all; }}
-                </style>
-                <script>
-                    function copyAddress() {{
-                        var text = document.getElementById("walletAddr").innerText;
-                        navigator.clipboard.writeText(text).then(function() {{
-                            alert("تم نسخ عنوان محفظتك الساخنة بنجاح: " + text);
-                        }});
-                    }}
-                    function verifyTx(e) {{
-                        if(!confirm("تأكيد أمني من محفظة أور الحية: هل تريد بث هذه العملية المالية عبر الإنترنت؟")) {{
-                            e.preventDefault();
-                        }}
-                    }}
-                </script>
-            </head>
-            <body>
-                <div class="container">
-                    <header>
-                        <div>
-                            <h1>🔥 محفظة أور الساخنة | Ur Coin (URC) Hot Wallet</h1>
-                            <p style="color: var(--text-muted); margin: 5px 0 0 0;">إدارة الحوالات الفورية ومراقبة البلوكشين مباشرة عبر الإنترنت</p>
-                        </div>
-                        <div class="hot-badge">● محفظة حية متصلة بالإنترنت (ONLINE)</div>
-                    </header>
+            # استبدال المتغيرات الحية بذكاء
+            rendered_html = html_template.replace("{{best_height}}", str(best_height))\
+                                         .replace("{{balance}}", f"{balance:.8f}")\
+                                         .replace("{{circulating_supply}}", f"{circulating_supply:,.2f}")\
+                                         .replace("{{mempool_count}}", str(mempool_count))\
+                                         .replace("{{address}}", address)
+            
+            self.wfile.write(rendered_html.encode('utf-8'))
+            return
 
-                    <div class="wallet-grid">
-                        <div class="wallet-card">
-                            <h4 style="margin: 0; color: var(--text-muted);">الرصيد الحي الإجمالي المتاح:</h4>
-                            <div style="font-size: 42px; font-weight: 900; color: var(--neon-gold); margin: 15px 0;">{balance:,.8f} <span style="font-size: 18px; color:#fff; font-weight:400;">URC</span></div>
-                            <h4 style="margin: 25px 0 5px 0; color: var(--text-muted);">عنوان الاستلام الفوري الخاص بك (انقر للنسخ):</h4>
-                            <div id="walletAddr" class="address-box" onclick="copyAddress()">{address}</div>
-                        </div>
+        elif path == "/api/blocks":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            with self.server.db_lock:
+                height = self.server.storage.get_best_height()
+                blocks_data = []
+                start = max(0, height - 10)
+                for h in range(start, height + 1):
+                    b = self.server.storage.get_block_by_height(h)
+                    if b:
+                        blocks_data.append({"height": b.header.height, "hash": b.hash, "tx_count": len(b.transactions)})
+            self.wfile.write(json.dumps(blocks_data).encode('utf-8'))
+            return
+        else:
+            self.send_error(404, "File Not Found")
 
-                        <div class="wallet-card">
-                            <h4 style="margin: 0 0 20px 0; color: var(--neon-gold); font-weight: 700;">⚡ تحويل مستعجل عبر الإنترنت</h4>
-                            <form action="/action/send" method="POST" onsubmit="verifyTx(event)">
-                                <div class="form-group">
-                                    <label>إلى عنوان المحفظة المستلمة:</label>
-                                    <input type="text" name="recipient" class="input-field" placeholder="urc1..." required>
-                                    <input type="hidden" name="web_source" value="true">
-                                </div>
-                                <div class="form-group">
-                                    <label>الكمية المراد بثها (URC):</label>
-                                    <input type="number" step="0.00000001" name="amount" class="input-field" placeholder="0.00" required>
-                                </div>
-                                <button type="submit" class="btn-action">توقيع وبث الحوالة الحية 🚀</button>
-                            </form>
-                        </div>
-                    </div>
+    def do_POST(self):
+        parsed_url = urlparse(self.path)
+        path = parsed_url.path
 
-                    <h3 style="color: var(--neon-blue); margin: 40px 0 15px 0;">⛓️ مستكشف المعاملات والكتل الحية (Live Explorer)</h3>
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>الكتلة</th>
-                                <th>هاش معرف الكتلة (Block Hash)</th>
-                                <th>المعاملات</th>
-                                <th>الـ Nonce الحسابي</th>
-                                <th>توقيت البث والمزامنة</th>
-                            </tr>
-                        </thead>
+        if path == "/action/send":
+            content_length = int(self.headers['Content-Length'])
+            post_data = self.rfile.read(content_length)
+            params = parse_qs(post_data.decode('utf-8'))
+            
+            wallet_to_use = self.server.wallet if self.server.wallet else getattr(self.server, 'local_wallet', None)
+            if not wallet_to_use:
+                self.send_error(403, "Wallet Restricted.")
+                return
+            
+            try:
+                recipient = params.get('recipient')[0]
+                amount = float(params.get('amount')[0])
+                
+                with self.server.db_lock:
+                    tx = wallet_to_use.create_transaction(self.server.storage, recipient, amount)
+                    if self.server.mempool.add_transaction(tx):
+                        if self.server.p2p:
+                            self.server.p2p.broadcast_transaction(tx)
+                
+                self.send_response(303)
+                self.send_header("Location", "/")
+                self.end_headers()
+                return
+            except Exception as e:
+                self.send_error(400, f"Error: {str(e)}")
+                return
+
+        elif path == "/rpc" or path == "/":
+            content_length = int(self.headers['Content-Length'])
+            post_data = self.rfile.read(content_length)
+            try:
+                req = json.loads(post_data.decode('utf-8'))
+                method = req.get("method")
+                params = req.get("params", [])
+                
+                result = None
+                error = None
+
+                with self.server.db_lock:
+                    if method == "get_chain_info":
+                        result = {
+                            "height": self.server.storage.get_best_height(),
+                            "best_hash": self.server.storage.get_best_block().hash if self.server.storage.get_best_block() else ""
+                        }
+                    elif method == "get_balance":
+                        addr = params if isinstance(params, list) and params else (params if params else "")
+                        result = self.server.storage.get_balance(addr)
+                    elif method == "submit_block":
+                        block_dict = params
+                        block = Block.from_dict(block_dict)
+                        if block.verify_pow():
+                            self.server.storage.add_block(block)
+                            if self.server.p2p:
+                                self.server.p2p.broadcast_block(block)
+                            result = "SUCCESS"
+                        else:
+                            error = "INVALID_POW"
+                    else:
+                        error = "UNKNOWN_METHOD"
+
+                response = {"result": result, "error": error, "id": req.get("id")}
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps(response).encode('utf-8'))
+            except Exception as e:
+                self.send_error(500, str(e))
+
+class UrCoinRPCServer:
+    def __init__(self, storage, mempool, p2p, wallet, host="0.0.0.0", port=9334, db_lock=None):
+        self.storage = storage
+        self.mempool = mempool
+        self.p2p = p2p
+        self.wallet = wallet
+        self.host = host
+        self.port = port
+        self.db_lock = db_lock if db_lock else threading.Lock()
+        
+        if self.wallet:
+            self.reward_address = self.wallet.address
+        else:
+            self.reward_address = "None"
+
+        self.httpd = HTTPServer((self.host, self.port), UrCoinRPCHandler)
+        self.httpd.storage = self.storage
+        self.httpd.mempool = self.mempool
+        self.httpd.p2p = self.p2p
+        self.httpd.wallet = self.wallet
+        self.httpd.db_lock = self.db_lock
+
+    def start(self):
+        self.server_thread = threading.Thread(target=self.httpd.serve_forever)
+        self.server_thread.daemon = True
+        self.server_thread.start()
+        print(f"[RPC] Isolated Engine Active on port {self.port}")
+
+    def stop(self):
+        self.httpd.shutdown()
+        self.httpd.server_close()
