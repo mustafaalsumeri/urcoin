@@ -1,102 +1,84 @@
 """
-Ur Coin Mempool:
-- In-memory transaction pool
-- Double-spend protection and signature validation
-- Block template transaction selection prioritized by fees
+Ur Coin (URC) - Memory Pool (Mempool) Engine
+Professional Version: Double-Spend Protection & Memory Flooding DoS Defense
 """
 
-from typing import Dict, List, Set, Tuple
-from urcoin.core import Transaction, TxIn, TxOut
-from urcoin.crypto import KeyPair
-from urcoin.storage import BlockchainStorage
+import threading
+from typing import Dict, Set
+from core import Transaction, Block
+
+# فرض قيود صارمة لحماية موارد الخادم السحابي والذاكرة العشوائية
+MAX_MEMPOOL_TRANSACTIONS = 5000  # الحد الأقصى للمعاملات المعلقة في الطابور
+MAX_TX_SIZE_BYTES = 102400       # الحد الأقصى لحجم المعاملة الواحدة (100 كيلوبايت)
 
 class Mempool:
-    def __init__(self, storage: BlockchainStorage):
+    def __init__(self, storage):
         self.storage = storage
-        self.transactions: Dict[str, Transaction] = {}
-        self.spent_outpoints: Set[Tuple[str, int]] = set()
+        self.transactions: Dict[str, Transaction] = {}  # جدول المعاملات المعلقة بمفتاح الـ Hash
+        self.mempool_lock = threading.Lock()           # قفل حماية لمنع تداخل عمليات الإضافة والحذف
+        
+        # 🟥 خط الدفاع الأول: مصفوفة سريعة لتعقب مخارج الـ UTXO الجاري استهلاكها حالياً في الذاكرة
+        self.spent_inputs_tracker: Set[str] = set()
 
-    def add_transaction(self, tx: Transaction) -> Tuple[bool, str]:
-        """Validate transaction and add to mempool."""
-        if tx.txid in self.transactions:
-            return False, "Transaction already in mempool"
+    def add_transaction(self, tx: Transaction) -> bool:
+        """
+        إضافة معاملة جديدة للميمبول بأمان بعد فحصها ضد هجمات الإنفاق المزدوج والإغراق.
+        """
+        # 1. التحقق من حجم المعاملة لحماية الرام من ملفات البيانات الضخمة
+        tx_string = str(tx.__dict__)
+        if len(tx_string.encode('utf-8')) > MAX_TX_SIZE_BYTES:
+            print(f"[Mempool] Rejected: Transaction {tx.hash[:16]}... size exceeds maximum limit.")
+            return False
 
-        if tx.is_coinbase():
-            return False, "Coinbase transaction cannot be accepted into mempool directly"
+        with self.mempool_lock:
+            # 2. التحقق من السعة القصوى للميمبول
+            if len(self.transactions) >= MAX_MEMPOOL_TRANSACTIONS:
+                print("[Mempool] Warning: Mempool is full! Rejecting incoming transactions.")
+                return False
 
-        if not tx.inputs or not tx.outputs:
-            return False, "Transaction must have inputs and outputs"
+            # 3. منع التكرار إذا كانت المعاملة موجودة بالفعل
+            if tx.hash in self.transactions:
+                return True
 
-        # Check for duplicate inputs within the transaction itself
-        seen_inputs = set()
-        for tx_in in tx.inputs:
-            outpoint = (tx_in.txid, tx_in.vout)
-            if outpoint in seen_inputs:
-                return False, "Duplicate inputs within transaction"
-            seen_inputs.add(outpoint)
-
-            # Check if input is already being spent in another pending mempool tx
-            if outpoint in self.spent_outpoints:
-                return False, f"Double spend detected for outpoint {tx_in.txid}:{tx_in.vout}"
-
-        # Validate inputs against UTXO database and verify signatures
-        total_input_amount = 0
-        for i, tx_in in enumerate(tx.inputs):
-            # Look up parent transaction
-            parent_tx = self.storage.get_transaction(tx_in.txid)
-            if not parent_tx:
-                return False, f"Parent transaction {tx_in.txid} not found"
-
-            if tx_in.vout < 0 or tx_in.vout >= len(parent_tx.outputs):
-                return False, f"Invalid output index {tx_in.vout} for parent {tx_in.txid}"
-
-            parent_out = parent_tx.outputs[tx_in.vout]
-            total_input_amount += parent_out.amount
-
-            # Verify signature
-            if not tx_in.pubkey or not tx_in.signature:
-                return False, "Missing signature or public key"
-
-            pubkey_bytes = bytes.fromhex(tx_in.pubkey)
-            sig_bytes = bytes.fromhex(tx_in.signature)
-            derived_addr = KeyPair.pubkey_to_address(pubkey_bytes)
-
-            if derived_addr != parent_out.recipient:
-                return False, f"Signer {derived_addr} does not match UTXO owner {parent_out.recipient}"
-
-            signing_hash = tx.get_signing_hash(i)
-            if not KeyPair.verify(pubkey_bytes, signing_hash, sig_bytes):
-                return False, f"Invalid cryptographic signature for input {i}"
-
-        # Validate outputs
-        total_output_amount = 0
-        for tx_out in tx.outputs:
-            if tx_out.amount <= 0:
-                return False, "Output amount must be positive"
-            total_output_amount += tx_out.amount
-
-        if total_output_amount > total_input_amount:
-            return False, f"Output total ({total_output_amount}) exceeds input total ({total_input_amount})"
-
-        # Admission to mempool
-        self.transactions[tx.txid] = tx
-        for tx_in in tx.inputs:
-            self.spent_outpoints.add((tx_in.txid, tx_in.vout))
-
-        return True, "Transaction admitted to mempool"
-
-    def remove_mined_transactions(self, block_transactions: List[Transaction]):
-        """Remove confirmed transactions and their spent outpoints from mempool."""
-        for tx in block_transactions:
-            if tx.txid in self.transactions:
-                del self.transactions[tx.txid]
+            # 4. 🟥 فحص الحماية ضد الإنفاق المزدوج المعلق (Double-Spend Audit)
+            # نقوم ببناء معرف فريد لكل مدخل لمعاملة للتأكد من عدم وجود معاملة أخرى تطالب به
+            temp_spent_set = set()
             for tx_in in tx.inputs:
-                outpoint = (tx_in.txid, tx_in.vout)
-                self.spent_outpoints.discard(outpoint)
+                input_key = f"{tx_in.txid}:{tx_in.vout}"
+                
+                # إذا وجدنا أن هذا المدخل محجوز بالفعل لمعاملة معلقة أخرى، نرفض المعاملة فوراً
+                if input_key in self.spent_inputs_tracker:
+                    print(f"[Mempool] Security Alert: Rejected Double-Spend attempt for input {input_key} in Tx {tx.hash[:16]}...")
+                    return False
+                temp_spent_set.add(input_key)
 
-    def get_transactions_for_block(self, max_count: int = 500) -> List[Transaction]:
-        """Return prioritized list of transactions for a new block template."""
-        return list(self.transactions.values())[:max_count]
+            # 5. التحقق من صحة المعاملة من قاعدة بيانات البلوكشين (صلاحية الـ UTXO الحقيقي والتوقيع)
+            if not tx.verify(self.storage):
+                print(f"[Mempool] Rejected: Signature or UTXO verification failed for Tx {tx.hash[:16]}...")
+                return False
 
-    def size(self) -> int:
-        return len(self.transactions)
+            # 6. إذا مرت المعاملة من كل الفحوصات بأمان، نقوم بتسجيلها وحجز مدخلاتها في الذاكرة
+            self.transactions[tx.hash] = tx
+            self.spent_inputs_tracker.update(temp_spent_set)
+            print(f"[Mempool] Accepted Transaction {tx.hash[:16]}... Total pending: {len(self.transactions)}")
+            return True
+
+    def remove_mined_transactions(self, block_transactions: list):
+        """
+        تنظيف الميمبول تلقائياً وحذف المعاملات التي تم تضمينها وتأكيدها بالفعل داخل كتلة جديدة ومقبولة.
+        """
+        with self.mempool_lock:
+            for tx in block_transactions:
+                # إذا كانت المعاملة المؤكدة موجودة في الميمبول، نحذفها
+                if tx.hash in self.transactions:
+                    del self.transactions[tx.hash]
+                
+                # فك حجز المدخلات المربوطة بها من مصفوفة التتبع لأنها استهلكت رسمياً في البلوكشين
+                for tx_in in tx.inputs:
+                    input_key = f"{tx_in.txid}:{tx_in.vout}"
+                    self.spent_inputs_tracker.discard(input_key)
+
+    def get_pending_transactions(self) -> list:
+        """جلب قائمة المعاملات المعلقة لتمريرها للمعدّن عند بناء كتلة جديدة"""
+        with self.mempool_lock:
+            return list(self.transactions.values())
