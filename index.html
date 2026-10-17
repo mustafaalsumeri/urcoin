@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ur Coin (URC) - محفظة الإنترنت الساخنة</title>
+    <style>
+        body { background-color: #060913; color: #f8fafc; font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 30px 15px; }
+        .container { max-width: 1000px; margin: 0 auto; }
+        header { background: #0f1626; padding: 25px; border-radius: 20px; border: 1px solid #1e293b; display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; }
+        h1 { color: #f59e0b; margin: 0; font-size: 26px; text-shadow: 0 0 15px rgba(245,158,11,0.2); }
+        .hot-badge { background: rgba(245, 158, 11, 0.08); border: 1px solid #f59e0b; color: #f59e0b; padding: 6px 14px; border-radius: 30px; font-weight: 700; font-size: 12px; }
+        .wallet-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 25px; margin-bottom: 30px; }
+        .wallet-card { background: #0f1626; border: 1px solid #1e293b; padding: 30px; border-radius: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); }
+        .address-box { background: #020617; padding: 14px; border-radius: 10px; border: 1px solid #1e293b; color: #f59e0b; font-family: monospace; font-size: 13px; text-align: center; cursor: pointer; word-break: break-all; margin-top: 15px; }
+        .form-group { margin-bottom: 20px; }
+        .form-group label { display: block; margin-bottom: 8px; color: #64748b; font-size: 13px; }
+        .input-field { width: 100%; background: #020617; border: 1px solid #1e293b; padding: 12px 16px; border-radius: 8px; color: #fff; box-sizing: border-box; }
+        .btn-action { width: 100%; background: #f59e0b; color: #000; padding: 14px; border: none; border-radius: 8px; font-weight: 800; cursor: pointer; font-size: 16px; }
+        .btn-action:hover { opacity: 0.9; box-shadow: 0 0 20px rgba(245,158,11,0.3); }
+        .stats-strip { display: flex; gap: 20px; margin-bottom: 20px; background: #0f1626; padding: 15px; border-radius: 10px; border: 1px solid #1e293b; font-size: 14px; color: #64748b; }
+    </style>
+    <script>
+        function copyAddress() {
+            var text = document.getElementById("walletAddr").innerText;
+            navigator.clipboard.writeText(text).then(function() {
+                alert("تم نسخ عنوان محفظتك الساخنة بنجاح: " + text);
+            });
+        }
+        function verifyTx(e) {
+            if(!confirm("تأكيد أمني من محفظة أور الحية: هل تريد بث هذه العملية المالية عبر الإنترنت؟")) {
+                e.preventDefault();
+            }
+        }
+    </script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div>
+                <h1>🔥 محفظة أور الساخنة | Ur Coin (URC) Hot Wallet</h1>
+                <p style="color: #64748b; margin: 5px 0 0 0;">إدارة الحوالات الفورية ومراقبة البلوكشين مباشرة عبر الإنترنت</p>
+            </div>
+            <div class="hot-badge">● محفظة حية متصلة بالإنترنت (ONLINE)</div>
+        </header>
+
+        <div class="wallet-grid">
+            <div class="wallet-card">
+                <h4 style="margin: 0; color: #64748b;">الرصيد الحي الإجمالي المتاح:</h4>
+                <div style="font-size: 42px; font-weight: 900; color: #f59e0b; margin: 15px 0;">{{balance}} <span style="font-size: 18px; color:#fff; font-weight:400;">URC</span></div>
+                <h4 style="margin: 25px 0 5px 0; color: #64748b;">عنوان الاستلام الفوري الخاص بك (انقر للنسخ):</h4>
+                <div id="walletAddr" class="address-box" onclick="copyAddress()">{{address}}</div>
+            </div>
+
+            <div class="wallet-card">
+                <h4 style="margin: 0 0 20px 0; color: #f59e0b; font-weight: 700;">⚡ تحويل مستعجل عبر الإنترنت</h4>
+                <form action="/action/send" method="POST" onsubmit="verifyTx(event)">
+                    <div class="form-group">
+                        <label>إلى عنوان المحفظة المستلمة:</label>
+                        <input type="text" name="recipient" class="input-field" placeholder="urc1..." required>
+                    </div>
+                    <div class="form-group">
+                        <label>الكمية المراد بثها (URC):</label>
+                        <input type="number" step="0.00000001" name="amount" class="input-field" placeholder="0.00" required>
+                    </div>
+                    <button type="submit" class="btn-action">توقيع وبث الحوالة الحية 🚀</button>
+                </form>
+            </div>
+        </div>
+
+        <div class="stats-strip">
+            <div><b>ارتفاع الشبكة:</b> {{best_height}}</div> | 
+            <div><b>المعروض العام المتداول:</b> {{circulating_supply}} URC</div> | 
+            <div><b>المعاملات المعلقة في الميمبول:</b> {{mempool_count}}</div>
+        </div>
+    </div>
+</body>
+</html>
