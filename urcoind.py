@@ -1,7 +1,7 @@
 """
-Ur Coin (URC) - Full Node Daemon (urcoind) - SECURE PRODUCTION VERSION
+Ur Coin (URC) - Full Node Daemon (urcoind) - SECURE THREAD-SAFE VERSION
 Launches:
-- Blockchain Storage (SQLite)
+- Blockchain Storage (SQLite with Threading Locks)
 - UTXO Mempool
 - P2P Network Node (Port 9333)
 - JSON-RPC & Web Explorer / Mining Dashboard (Port 9334)
@@ -11,6 +11,7 @@ import sys
 import time
 import argparse
 import signal
+import threading  # 🟥 إضافة مكتبة إدارة الخيوط المتوازية
 
 if sys.stdout.encoding != 'utf-8':
     try:
@@ -42,10 +43,14 @@ def main():
     print("      Proof-of-Work Algorithm: UrHash-v1 (Memory-Hard PoW)")
     print("==================================================================")
 
-    # 1. Initialize Storage
-    storage = BlockchainStorage(args.db_path)
-    best_height = storage.get_best_height()
-    best_block = storage.get_best_block()
+    # 🟥 إنشاء القفل البرمجي المشترك لحماية قاعدة البيانات
+    db_lock = threading.Lock()
+
+    # 1. Initialize Storage (تأمين القراءة الأولى)
+    with db_lock:
+        storage = BlockchainStorage(args.db_path)
+        best_height = storage.get_best_height()
+        best_block = storage.get_best_block()
     print(f"[Storage] Loaded chain from '{args.db_path}'. Current Height: #{best_height}")
     print(f"[Storage] Best Block Hash: {best_block.hash if best_block else 'None'}")
 
@@ -56,44 +61,47 @@ def main():
     wallet = Wallet.create_or_load(args.wallet_path)
     print(f"[Wallet] Node Wallet Address: {wallet.address}")
 
-    # 4. Initialize P2P Network (تم تعديل المعالجة لدعم المزامنة الكاملة واللحظية)
-    p2p = None  # سنقوم بتعريفه لاحقاً بالأسفل ليتمكن المعالج من استخدامه
+    # 4. Initialize P2P Network
+    p2p = None  
 
     def on_new_block(block: Block):
-        current_height = storage.get_best_height()
-        
-        # الحالة الأولى: استقبال كتلة جديدة مباشرة (التدفق الطبيعي للشبكة)
-        if block.header.height == current_height + 1:
-            if block.verify_pow():
-                storage.add_block(block)
-                mempool.remove_mined_transactions(block.transactions)
-                print(f"[P2P] Synced Block #{block.header.height} from network! Hash: {block.hash[:16]}...")
-                
-        # الحالة الثانية: جهاز المستخدم متأخر جداً ويحتاج لمزامنة الكتل القديمة الفائتة (Initial Block Download)
-        elif block.header.height > current_height + 1:
-            print(f"[P2P] Out of sync. Node height: #{current_height}, Network height: #{block.header.height}. Requesting history...")
-            if p2p:
-                # نطلب نطاق الكتل المفقودة بالكامل من العقدة المتصلة لتحديث البلوكشين محلياً بالترتيب
-                missing_blocks = p2p.request_blocks_from_peer(current_height + 1, block.header.height)
-                for b in missing_blocks:
-                    if b.verify_pow():
-                        storage.add_block(b)
-                        mempool.remove_mined_transactions(b.transactions)
-                print(f"[P2P] Catch-up complete! New Height: #{storage.get_best_height()}")
+        # 🟥 حماية عملية إضافة الكتل والمزامنة من التداخل عبر الـ Lock
+        with db_lock:
+            current_height = storage.get_best_height()
+            
+            if block.header.height == current_height + 1:
+                if block.verify_pow():
+                    storage.add_block(block)
+                    mempool.remove_mined_transactions(block.transactions)
+                    print(f"[P2P] Synced Block #{block.header.height} from network! Hash: {block.hash[:16]}...")
+                    
+            elif block.header.height > current_height + 1:
+                print(f"[P2P] Out of sync. Node height: #{current_height}, Network height: #{block.header.height}. Requesting history...")
+                if p2p:
+                    missing_blocks = p2p.request_blocks_from_peer(current_height + 1, block.header.height)
+                    for b in missing_blocks:
+                        if b.verify_pow():
+                            storage.add_block(b)
+                            mempool.remove_mined_transactions(b.transactions)
+                    print(f"[P2P] Catch-up complete! New Height: #{storage.get_best_height()}")
 
     def get_chain_info():
-        return {
-            "height": storage.get_best_height(),
-            "best_hash": storage.get_best_block().hash if storage.get_best_block() else ""
-        }
+        # 🟥 حماية قراءة حالة الشبكة من قبل المستخدمين الخارجيين
+        with db_lock:
+            return {
+                "height": storage.get_best_height(),
+                "best_hash": storage.get_best_block().hash if storage.get_best_block() else ""
+            }
 
     def get_blocks_range(from_h, to_h):
-        blocks = []
-        for h in range(from_h, to_h + 1):
-            b = storage.get_block_by_height(h)
-            if b:
-                blocks.append(b)
-        return blocks
+        # 🟥 حماية قراءة سلسلة الكتل عند طلبها من عقدة أخرى
+        with db_lock:
+            blocks = []
+            for h in range(from_h, to_h + 1):
+                b = storage.get_block_by_height(h)
+                if b:
+                    blocks.append(b)
+            return blocks
 
     p2p = P2PNetwork(
         host="0.0.0.0",
@@ -105,27 +113,22 @@ def main():
     )
     p2p.start()
 
-    # Connect to initial peers if provided
     if args.peer:
         for p in args.peer:
             if ":" in p:
                 phost, pport = p.split(":", 1)
                 p2p.connect_to_peer(phost, int(pport))
 
-    # 5. Initialize RPC & Web Dashboard (تأمين الوصول)
-    # إذا تم تشغيله كخادم عام، نمرر خيار حماية لمنع العمليات المالية الحساسة عبر الويب الخارجي
-    rpc_host = "0.0.0.0"
-    if args.public_node:
-        print("[Security] WARNING: Running as Public Seed Node. Wallet spending via remote RPC is restricted.")
-        # نترك المحفظة ممررة للمستكشف، ولكن كود الـ rpc_server يجب أن يتحقق داخلياً من أمان العمليات
-    
+    # 5. Initialize RPC & Web Dashboard
+    # 🟥 قمنا بتمرير الـ db_lock لـ خادم الـ RPC لحماية استعلامات واجهة الويب والـ API
     rpc_server = UrCoinRPCServer(
         storage=storage,
         mempool=mempool,
         p2p=p2p,
-        wallet=wallet if not args.public_node else None, # إخفاء الكائن المالي تماماً في الوضع العام لحماية المفاتيح
-        host=rpc_host,
-        port=args.rpc_port
+        wallet=wallet if not args.public_node else None,
+        host="0.0.0.0",
+        port=args.rpc_port,
+        db_lock=db_lock  # تذكر تمرير هذا البارامتر الجديد
     )
     rpc_server.start()
 
