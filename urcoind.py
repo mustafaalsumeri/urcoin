@@ -1,7 +1,7 @@
 """
-Ur Coin (URC) - Full Node Daemon (urcoind) - SECURE THREAD-SAFE VERSION
+Ur Coin (URC) - Full Node Daemon (urcoind)
 Launches:
-- Blockchain Storage (SQLite with Threading Locks)
+- Blockchain Storage (SQLite)
 - UTXO Mempool
 - P2P Network Node (Port 9333)
 - JSON-RPC & Web Explorer / Mining Dashboard (Port 9334)
@@ -11,7 +11,6 @@ import sys
 import time
 import argparse
 import signal
-import threading  # 🟥 إضافة مكتبة إدارة الخيوط المتوازية
 
 if sys.stdout.encoding != 'utf-8':
     try:
@@ -34,7 +33,6 @@ def main():
     parser.add_argument("--wallet-path", type=str, default="urcoin_wallet.json", help="Node wallet file")
     parser.add_argument("--peer", type=str, action="append", help="Connect to peer (host:port)")
     parser.add_argument("--mine", action="store_true", help="Automatically start GPU mining upon launch")
-    parser.add_argument("--public-node", action="store_true", help="Run as a public seed node (disables sensitive remote RPC)")
 
     args = parser.parse_args()
 
@@ -43,14 +41,10 @@ def main():
     print("      Proof-of-Work Algorithm: UrHash-v1 (Memory-Hard PoW)")
     print("==================================================================")
 
-    # 🟥 إنشاء القفل البرمجي المشترك لحماية قاعدة البيانات
-    db_lock = threading.Lock()
-
-    # 1. Initialize Storage (تأمين القراءة الأولى)
-    with db_lock:
-        storage = BlockchainStorage(args.db_path)
-        best_height = storage.get_best_height()
-        best_block = storage.get_best_block()
+    # 1. Initialize Storage
+    storage = BlockchainStorage(args.db_path)
+    best_height = storage.get_best_height()
+    best_block = storage.get_best_block()
     print(f"[Storage] Loaded chain from '{args.db_path}'. Current Height: #{best_height}")
     print(f"[Storage] Best Block Hash: {best_block.hash if best_block else 'None'}")
 
@@ -62,46 +56,26 @@ def main():
     print(f"[Wallet] Node Wallet Address: {wallet.address}")
 
     # 4. Initialize P2P Network
-    p2p = None  
-
     def on_new_block(block: Block):
-        # 🟥 حماية عملية إضافة الكتل والمزامنة من التداخل عبر الـ Lock
-        with db_lock:
-            current_height = storage.get_best_height()
-            
-            if block.header.height == current_height + 1:
-                if block.verify_pow():
-                    storage.add_block(block)
-                    mempool.remove_mined_transactions(block.transactions)
-                    print(f"[P2P] Synced Block #{block.header.height} from network! Hash: {block.hash[:16]}...")
-                    
-            elif block.header.height > current_height + 1:
-                print(f"[P2P] Out of sync. Node height: #{current_height}, Network height: #{block.header.height}. Requesting history...")
-                if p2p:
-                    missing_blocks = p2p.request_blocks_from_peer(current_height + 1, block.header.height)
-                    for b in missing_blocks:
-                        if b.verify_pow():
-                            storage.add_block(b)
-                            mempool.remove_mined_transactions(b.transactions)
-                    print(f"[P2P] Catch-up complete! New Height: #{storage.get_best_height()}")
+        if block.header.height > storage.get_best_height():
+            if block.verify_pow():
+                storage.add_block(block)
+                mempool.remove_mined_transactions(block.transactions)
+                print(f"[P2P] Synced Block #{block.header.height} from network! Hash: {block.hash[:16]}...")
 
     def get_chain_info():
-        # 🟥 حماية قراءة حالة الشبكة من قبل المستخدمين الخارجيين
-        with db_lock:
-            return {
-                "height": storage.get_best_height(),
-                "best_hash": storage.get_best_block().hash if storage.get_best_block() else ""
-            }
+        return {
+            "height": storage.get_best_height(),
+            "best_hash": storage.get_best_block().hash if storage.get_best_block() else ""
+        }
 
     def get_blocks_range(from_h, to_h):
-        # 🟥 حماية قراءة سلسلة الكتل عند طلبها من عقدة أخرى
-        with db_lock:
-            blocks = []
-            for h in range(from_h, to_h + 1):
-                b = storage.get_block_by_height(h)
-                if b:
-                    blocks.append(b)
-            return blocks
+        blocks = []
+        for h in range(from_h, to_h + 1):
+            b = storage.get_block_by_height(h)
+            if b:
+                blocks.append(b)
+        return blocks
 
     p2p = P2PNetwork(
         host="0.0.0.0",
@@ -113,6 +87,7 @@ def main():
     )
     p2p.start()
 
+    # Connect to initial peers if provided
     if args.peer:
         for p in args.peer:
             if ":" in p:
@@ -120,19 +95,17 @@ def main():
                 p2p.connect_to_peer(phost, int(pport))
 
     # 5. Initialize RPC & Web Dashboard
-    # 🟥 قمنا بتمرير الـ db_lock لـ خادم الـ RPC لحماية استعلامات واجهة الويب والـ API
     rpc_server = UrCoinRPCServer(
         storage=storage,
         mempool=mempool,
         p2p=p2p,
-        wallet=wallet if not args.public_node else None,
+        wallet=wallet,
         host="0.0.0.0",
-        port=args.rpc_port,
-        db_lock=db_lock  # تذكر تمرير هذا البارامتر الجديد
+        port=args.rpc_port
     )
     rpc_server.start()
 
-    if args.mine and not args.public_node:
+    if args.mine:
         rpc_server.start_mining()
 
     print("\n------------------------------------------------------------------")
