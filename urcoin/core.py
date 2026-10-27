@@ -6,6 +6,7 @@ Ur Coin (URC) Core Blockchain Architecture:
 - Genesis Block Specification
 """
 
+import os
 import json
 import time
 import struct
@@ -24,10 +25,12 @@ DECIMALS = 8
 COIN = 100_000_000 # 1 URC = 10^8 atomic units
 
 INITIAL_BLOCK_REWARD = 50 * COIN
-HALVING_INTERVAL = 210_000 # Halves every 210,000 blocks (~2.4 months at 30s)
-TARGET_BLOCK_TIME = 30     # 30 seconds per block
-DIFFICULTY_WINDOW = 5      # Retarget adjustment rolling window
-MAX_DIFFICULTY_ADJUSTMENT = 4 # Maximum 4x change per window
+HALVING_INTERVAL = 210_000  # Halves every 210,000 blocks (~73 days at 30s)
+TARGET_BLOCK_TIME = 30      # 30 seconds per block
+DIFFICULTY_WINDOW = 5       # Retarget adjustment rolling window
+MAX_DIFFICULTY_ADJUSTMENT = 4  # Maximum 4x change per window
+MAX_FUTURE_DRIFT = 2 * 60 * 60  # Reject blocks more than 2 hours in the future
+MAX_BLOCKS_PER_REQUEST = 200
 
 # Initial mining target (accessible enough for instant local mining test)
 INITIAL_TARGET_HEX = "0000ffff00000000000000000000000000000000000000000000000000000000"
@@ -42,6 +45,28 @@ def calculate_block_reward(height: int) -> int:
     if halvings >= 64:
         return 0
     return INITIAL_BLOCK_REWARD >> halvings
+
+def circulating_supply(tip_height: int) -> int:
+    """Exact minted supply from genesis through tip_height (inclusive)."""
+    if tip_height < 0:
+        return 0
+    total = 0
+    height = 0
+    while height <= tip_height:
+        reward = calculate_block_reward(height)
+        if reward == 0:
+            break
+        era_end = min(tip_height, (height // HALVING_INTERVAL + 1) * HALVING_INTERVAL - 1)
+        count = era_end - height + 1
+        total += reward * count
+        height = era_end + 1
+    return total
+
+def block_work(target: int) -> int:
+    """Relative proof-of-work for a single block (higher is harder)."""
+    if target <= 0:
+        return 0
+    return (1 << 256) // (target + 1)
 
 def get_epoch_seed(epoch_number: int) -> bytes:
     """Derive deterministic 32-byte epoch seed for DAG."""
@@ -285,37 +310,49 @@ def create_genesis_block() -> Block:
     return genesis_block
 
 GENESIS_BLOCK = create_genesis_block()
+GENESIS_HASH = GENESIS_BLOCK.hash
 
 # -------------------------------------------------------------
 # Difficulty Adjustment (Kimoto / Digishield Algorithm)
 # -------------------------------------------------------------
-def calculate_next_target(past_blocks: List[BlockHeader]) -> int:
+def calculate_next_target(past_blocks: List[BlockHeader], now: Optional[int] = None) -> int:
     """
     Adjusts mining target every DIFFICULTY_WINDOW blocks to target 30s block time.
-    Uses exponential moving average with damping factors to prevent wild swings.
+    Uses exponential moving average with damping factors and time-decay for weak GPUs.
     """
+    if os.environ.get("URCOIN_TEST_MODE") == "1":
+        return MAX_TARGET
+
     if len(past_blocks) < DIFFICULTY_WINDOW:
-        return INITIAL_TARGET
+        base_target = INITIAL_TARGET
+    else:
+        first_block = past_blocks[-DIFFICULTY_WINDOW]
+        last_block = past_blocks[-1]
 
-    first_block = past_blocks[-DIFFICULTY_WINDOW]
-    last_block = past_blocks[-1]
+        actual_timespan = last_block.timestamp - first_block.timestamp
+        target_timespan = (DIFFICULTY_WINDOW - 1) * TARGET_BLOCK_TIME
 
-    actual_timespan = last_block.timestamp - first_block.timestamp
-    target_timespan = (DIFFICULTY_WINDOW - 1) * TARGET_BLOCK_TIME
+        # Bound damping
+        if actual_timespan < target_timespan // MAX_DIFFICULTY_ADJUSTMENT:
+            actual_timespan = target_timespan // MAX_DIFFICULTY_ADJUSTMENT
+        elif actual_timespan > target_timespan * MAX_DIFFICULTY_ADJUSTMENT:
+            actual_timespan = target_timespan * MAX_DIFFICULTY_ADJUSTMENT
 
-    # Bound damping
-    if actual_timespan < target_timespan // MAX_DIFFICULTY_ADJUSTMENT:
-        actual_timespan = target_timespan // MAX_DIFFICULTY_ADJUSTMENT
-    elif actual_timespan > target_timespan * MAX_DIFFICULTY_ADJUSTMENT:
-        actual_timespan = target_timespan * MAX_DIFFICULTY_ADJUSTMENT
+        current_target = last_block.target
+        base_target = (current_target * actual_timespan) // target_timespan
 
-    current_target = last_block.target
-    new_target = (current_target * actual_timespan) // target_timespan
+    # Time-decay (Emergency Difficulty Adjustment / Digishield) for weak GPUs
+    if past_blocks and now is not None:
+        last_timestamp = past_blocks[-1].timestamp
+        elapsed = now - last_timestamp
+        if elapsed > TARGET_BLOCK_TIME * 2:
+            decay_steps = min(32, (elapsed - TARGET_BLOCK_TIME) // TARGET_BLOCK_TIME)
+            base_target = base_target * (2 ** decay_steps)
 
     # Prevent target from exceeding MAX_TARGET
-    if new_target > MAX_TARGET:
-        new_target = MAX_TARGET
-    if new_target <= 0:
-        new_target = 1
+    if base_target > MAX_TARGET:
+        base_target = MAX_TARGET
+    if base_target <= 0:
+        base_target = 1
 
-    return new_target
+    return base_target

@@ -92,19 +92,23 @@ def get_opencl_devices() -> List[OpenCLDevice]:
     return devices_list
 
 # -------------------------------------------------------------
+# -------------------------------------------------------------
 # UrCoin GPUMiner Implementation
 # -------------------------------------------------------------
 class GPUMiner:
-    def __init__(self, device_index: int = 0, dag_items: int = DEFAULT_DAG_ITEMS, rounds: int = DEFAULT_ROUNDS):
+    def __init__(self, device_index: int = 0, dag_items: int = DEFAULT_DAG_ITEMS,
+                 rounds: int = DEFAULT_ROUNDS, light_mode: Optional[bool] = None):
         self.device_index = device_index
         self.dag_items = dag_items # 16,777,216 items = 1.0 GB
         self.rounds = rounds
+        self.light_mode = light_mode
         self.opencl = None
         self.ctx = None
         self.queue = None
         self.prog = None
         self.init_kernel = None
         self.search_kernel = None
+        self.search_light_kernel = None
         self.dag_buf = None
         self.current_epoch = -1
         self.device: Optional[OpenCLDevice] = None
@@ -124,6 +128,16 @@ class GPUMiner:
             self.device_index = 0
         self.device = devices[self.device_index]
         print(f"[Miner] Selected GPU: {self.device}")
+
+        # Auto-detect low VRAM GPU (less than 2.5 GB)
+        if self.light_mode is None:
+            if self.device.memory_bytes < 2.5 * (1024 ** 3):
+                self.light_mode = True
+                print(f"[Miner] Low VRAM GPU detected ({self.device.memory_gb:.2f} GB). Auto-enabling Zero-VRAM Light GPU Mode!")
+            else:
+                self.light_mode = False
+        elif self.light_mode:
+            print("[Miner] Zero-VRAM Light Mode explicitly requested. No DAG buffer will be allocated.")
 
         self.opencl = ctypes.cdll.LoadLibrary("OpenCL.dll")
 
@@ -174,44 +188,51 @@ class GPUMiner:
 
         self.init_kernel = self.opencl.clCreateKernel(self.prog, b"generate_dag_buffer", ctypes.byref(err))
         self.search_kernel = self.opencl.clCreateKernel(self.prog, b"urhash_miner_search", ctypes.byref(err))
+        self.search_light_kernel = self.opencl.clCreateKernel(self.prog, b"urhash_miner_search_light", ctypes.byref(err))
 
     def ensure_dag_for_epoch(self, epoch: int):
         """Allocate and generate DAG in GPU VRAM if epoch changed."""
+        if self.light_mode:
+            return
         if self.current_epoch == epoch and self.dag_buf is not None:
             return
 
-        print(f"[Miner] Initializing {self.dag_items * 64 / (1024**3):.2f} GB DAG for Epoch {epoch} in GPU VRAM...")
-        if self.dag_buf:
-            self.opencl.clReleaseMemObject(self.dag_buf)
-            self.dag_buf = None
+        try:
+            print(f"[Miner] Initializing {self.dag_items * 64 / (1024**3):.2f} GB DAG for Epoch {epoch} in GPU VRAM...")
+            if self.dag_buf:
+                self.opencl.clReleaseMemObject(self.dag_buf)
+                self.dag_buf = None
 
-        err = ctypes.c_int32()
-        dag_bytes = self.dag_items * 64 # e.g. 1024 MB
-        raw_buf = self.opencl.clCreateBuffer(self.ctx, CL_MEM_READ_WRITE, dag_bytes, None, ctypes.byref(err))
-        if err.value != 0:
-            raise RuntimeError(f"Failed to allocate {dag_bytes / (1024**2):.0f} MB in GPU VRAM (code {err.value})")
-        self.dag_buf = cl_mem(raw_buf)
+            err = ctypes.c_int32()
+            dag_bytes = self.dag_items * 64 # e.g. 1024 MB
+            raw_buf = self.opencl.clCreateBuffer(self.ctx, CL_MEM_READ_WRITE, dag_bytes, None, ctypes.byref(err))
+            if err.value != 0:
+                raise RuntimeError(f"Failed to allocate {dag_bytes / (1024**2):.0f} MB in GPU VRAM (code {err.value})")
+            self.dag_buf = cl_mem(raw_buf)
 
-        # Generate DAG
-        epoch_seed = get_epoch_seed(epoch)
-        seed_ulongs = (ctypes.c_ulonglong * 4)(*struct.unpack("<4Q", epoch_seed))
-        seed_buf = cl_mem(self.opencl.clCreateBuffer(self.ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, 32, ctypes.byref(seed_ulongs), ctypes.byref(err)))
+            # Generate DAG
+            epoch_seed = get_epoch_seed(epoch)
+            seed_ulongs = (ctypes.c_ulonglong * 4)(*struct.unpack("<4Q", epoch_seed))
+            seed_buf = cl_mem(self.opencl.clCreateBuffer(self.ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, 32, ctypes.byref(seed_ulongs), ctypes.byref(err)))
 
-        num_items_c = ctypes.c_ulonglong(self.dag_items)
-        self.opencl.clSetKernelArg(self.init_kernel, 0, ctypes.c_size_t(ctypes.sizeof(cl_mem)), ctypes.byref(seed_buf))
-        self.opencl.clSetKernelArg(self.init_kernel, 1, ctypes.c_size_t(ctypes.sizeof(ctypes.c_ulonglong)), ctypes.byref(num_items_c))
-        self.opencl.clSetKernelArg(self.init_kernel, 2, ctypes.c_size_t(ctypes.sizeof(cl_mem)), ctypes.byref(self.dag_buf))
+            num_items_c = ctypes.c_ulonglong(self.dag_items)
+            self.opencl.clSetKernelArg(self.init_kernel, 0, ctypes.c_size_t(ctypes.sizeof(cl_mem)), ctypes.byref(seed_buf))
+            self.opencl.clSetKernelArg(self.init_kernel, 1, ctypes.c_size_t(ctypes.sizeof(ctypes.c_ulonglong)), ctypes.byref(num_items_c))
+            self.opencl.clSetKernelArg(self.init_kernel, 2, ctypes.c_size_t(ctypes.sizeof(cl_mem)), ctypes.byref(self.dag_buf))
 
-        gws = (ctypes.c_size_t * 1)(self.dag_items)
-        t0 = time.time()
-        ret = self.opencl.clEnqueueNDRangeKernel(self.queue, self.init_kernel, 1, None, gws, None, 0, None, None)
-        if ret != 0:
-            raise RuntimeError(f"clEnqueueNDRangeKernel DAG init failed with code {ret}")
-        self.opencl.clFinish(self.queue)
-        print(f"[Miner] DAG generation completed in {time.time() - t0:.2f}s!")
+            gws = (ctypes.c_size_t * 1)(self.dag_items)
+            t0 = time.time()
+            ret = self.opencl.clEnqueueNDRangeKernel(self.queue, self.init_kernel, 1, None, gws, None, 0, None, None)
+            if ret != 0:
+                raise RuntimeError(f"clEnqueueNDRangeKernel DAG init failed with code {ret}")
+            self.opencl.clFinish(self.queue)
+            print(f"[Miner] DAG generation completed in {time.time() - t0:.2f}s!")
 
-        self.opencl.clReleaseMemObject(seed_buf)
-        self.current_epoch = epoch
+            self.opencl.clReleaseMemObject(seed_buf)
+            self.current_epoch = epoch
+        except Exception as e:
+            print(f"[Miner] VRAM allocation failed: {e}. Switching to Zero-VRAM Light GPU Mode!")
+            self.light_mode = True
 
     def search_batch(self, header_hash: bytes, target_int: int, epoch: int,
                      start_nonce: int, global_work_size: int = 65536,
@@ -241,21 +262,40 @@ class GPUMiner:
         num_items_c = ctypes.c_ulonglong(self.dag_items)
         rounds_c = ctypes.c_int32(self.rounds)
 
-        self.opencl.clSetKernelArg(self.search_kernel, 0, ctypes.c_size_t(ctypes.sizeof(cl_mem)), ctypes.byref(self.dag_buf))
-        self.opencl.clSetKernelArg(self.search_kernel, 1, ctypes.c_size_t(ctypes.sizeof(cl_mem)), ctypes.byref(header_buf))
-        self.opencl.clSetKernelArg(self.search_kernel, 2, ctypes.c_size_t(ctypes.sizeof(cl_mem)), ctypes.byref(target_buf))
-        self.opencl.clSetKernelArg(self.search_kernel, 3, ctypes.c_size_t(ctypes.sizeof(ctypes.c_ulonglong)), ctypes.byref(start_nonce_c))
-        self.opencl.clSetKernelArg(self.search_kernel, 4, ctypes.c_size_t(ctypes.sizeof(ctypes.c_ulonglong)), ctypes.byref(npt_c))
-        self.opencl.clSetKernelArg(self.search_kernel, 5, ctypes.c_size_t(ctypes.sizeof(ctypes.c_ulonglong)), ctypes.byref(num_items_c))
-        self.opencl.clSetKernelArg(self.search_kernel, 6, ctypes.c_size_t(ctypes.sizeof(ctypes.c_int32)), ctypes.byref(rounds_c))
-        self.opencl.clSetKernelArg(self.search_kernel, 7, ctypes.c_size_t(ctypes.sizeof(cl_mem)), ctypes.byref(found_count_buf))
-        self.opencl.clSetKernelArg(self.search_kernel, 8, ctypes.c_size_t(ctypes.sizeof(cl_mem)), ctypes.byref(found_nonces_buf))
-        self.opencl.clSetKernelArg(self.search_kernel, 9, ctypes.c_size_t(ctypes.sizeof(cl_mem)), ctypes.byref(found_hashes_buf))
+        seed_buf = None
+        if self.light_mode:
+            epoch_seed = get_epoch_seed(epoch)
+            seed_ulongs = (ctypes.c_ulonglong * 4)(*struct.unpack("<4Q", epoch_seed))
+            seed_buf = cl_mem(self.opencl.clCreateBuffer(self.ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, 32, ctypes.byref(seed_ulongs), ctypes.byref(err)))
+
+            self.opencl.clSetKernelArg(self.search_light_kernel, 0, ctypes.c_size_t(ctypes.sizeof(cl_mem)), ctypes.byref(seed_buf))
+            self.opencl.clSetKernelArg(self.search_light_kernel, 1, ctypes.c_size_t(ctypes.sizeof(cl_mem)), ctypes.byref(header_buf))
+            self.opencl.clSetKernelArg(self.search_light_kernel, 2, ctypes.c_size_t(ctypes.sizeof(cl_mem)), ctypes.byref(target_buf))
+            self.opencl.clSetKernelArg(self.search_light_kernel, 3, ctypes.c_size_t(ctypes.sizeof(ctypes.c_ulonglong)), ctypes.byref(start_nonce_c))
+            self.opencl.clSetKernelArg(self.search_light_kernel, 4, ctypes.c_size_t(ctypes.sizeof(ctypes.c_ulonglong)), ctypes.byref(npt_c))
+            self.opencl.clSetKernelArg(self.search_light_kernel, 5, ctypes.c_size_t(ctypes.sizeof(ctypes.c_ulonglong)), ctypes.byref(num_items_c))
+            self.opencl.clSetKernelArg(self.search_light_kernel, 6, ctypes.c_size_t(ctypes.sizeof(ctypes.c_int32)), ctypes.byref(rounds_c))
+            self.opencl.clSetKernelArg(self.search_light_kernel, 7, ctypes.c_size_t(ctypes.sizeof(cl_mem)), ctypes.byref(found_count_buf))
+            self.opencl.clSetKernelArg(self.search_light_kernel, 8, ctypes.c_size_t(ctypes.sizeof(cl_mem)), ctypes.byref(found_nonces_buf))
+            self.opencl.clSetKernelArg(self.search_light_kernel, 9, ctypes.c_size_t(ctypes.sizeof(cl_mem)), ctypes.byref(found_hashes_buf))
+            active_kernel = self.search_light_kernel
+        else:
+            self.opencl.clSetKernelArg(self.search_kernel, 0, ctypes.c_size_t(ctypes.sizeof(cl_mem)), ctypes.byref(self.dag_buf))
+            self.opencl.clSetKernelArg(self.search_kernel, 1, ctypes.c_size_t(ctypes.sizeof(cl_mem)), ctypes.byref(header_buf))
+            self.opencl.clSetKernelArg(self.search_kernel, 2, ctypes.c_size_t(ctypes.sizeof(cl_mem)), ctypes.byref(target_buf))
+            self.opencl.clSetKernelArg(self.search_kernel, 3, ctypes.c_size_t(ctypes.sizeof(ctypes.c_ulonglong)), ctypes.byref(start_nonce_c))
+            self.opencl.clSetKernelArg(self.search_kernel, 4, ctypes.c_size_t(ctypes.sizeof(ctypes.c_ulonglong)), ctypes.byref(npt_c))
+            self.opencl.clSetKernelArg(self.search_kernel, 5, ctypes.c_size_t(ctypes.sizeof(ctypes.c_ulonglong)), ctypes.byref(num_items_c))
+            self.opencl.clSetKernelArg(self.search_kernel, 6, ctypes.c_size_t(ctypes.sizeof(ctypes.c_int32)), ctypes.byref(rounds_c))
+            self.opencl.clSetKernelArg(self.search_kernel, 7, ctypes.c_size_t(ctypes.sizeof(cl_mem)), ctypes.byref(found_count_buf))
+            self.opencl.clSetKernelArg(self.search_kernel, 8, ctypes.c_size_t(ctypes.sizeof(cl_mem)), ctypes.byref(found_nonces_buf))
+            self.opencl.clSetKernelArg(self.search_kernel, 9, ctypes.c_size_t(ctypes.sizeof(cl_mem)), ctypes.byref(found_hashes_buf))
+            active_kernel = self.search_kernel
 
         gws = (ctypes.c_size_t * 1)(global_work_size)
 
         t_start = time.perf_counter()
-        ret = self.opencl.clEnqueueNDRangeKernel(self.queue, self.search_kernel, 1, None, gws, None, 0, None, None)
+        ret = self.opencl.clEnqueueNDRangeKernel(self.queue, active_kernel, 1, None, gws, None, 0, None, None)
         if ret != 0:
             raise RuntimeError(f"clEnqueueNDRangeKernel search failed with code {ret}")
         self.opencl.clFinish(self.queue)
@@ -278,6 +318,8 @@ class GPUMiner:
                 results.append((nonces[i], h_bytes[i*32 : (i+1)*32].hex()))
 
         # Clean buffers
+        if seed_buf:
+            self.opencl.clReleaseMemObject(seed_buf)
         self.opencl.clReleaseMemObject(header_buf)
         self.opencl.clReleaseMemObject(target_buf)
         self.opencl.clReleaseMemObject(found_count_buf)
@@ -290,3 +332,40 @@ class GPUMiner:
             self.hashrate = batch_hashes / t_delta
 
         return results
+
+
+# -------------------------------------------------------------
+# CPU Fallback Miner Implementation
+# -------------------------------------------------------------
+class CPUMiner:
+    """
+    Multi-threaded CPU miner worker.
+    Allows mining on any machine even without dedicated GPU.
+    """
+    def __init__(self, threads: int = 0):
+        import multiprocessing
+        self.threads = threads if threads > 0 else max(1, multiprocessing.cpu_count() - 1)
+        self.hashrate = 0.0
+        self.total_hashes = 0
+        self.blocks_found = 0
+        self.device = OpenCLDevice(None, None, "CPU Worker", f"Multi-Core CPU ({self.threads} Threads)", 0)
+
+    def search_batch(self, header_hash: bytes, target_int: int, epoch: int,
+                     start_nonce: int, count: int = 5000) -> List[Tuple[int, str]]:
+        from urcoin.crypto import urhash_cpu_hash, get_epoch_seed
+        epoch_seed = get_epoch_seed(epoch)
+        t0 = time.perf_counter()
+        results = []
+
+        for nonce in range(start_nonce, start_nonce + count):
+            digest = urhash_cpu_hash(header_hash, nonce, epoch_seed)
+            if int.from_bytes(digest, "big") <= target_int:
+                results.append((nonce, digest.hex()))
+                break
+
+        dt = time.perf_counter() - t0
+        self.total_hashes += count
+        if dt > 0:
+            self.hashrate = count / dt
+        return results
+

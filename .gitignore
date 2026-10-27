@@ -2,15 +2,25 @@
 urcoin_wallet.json
 new_urcoin_wallet.json
 *.key
+urcoin.cookie
+urcoin.walletpass
+*.walletpass
 
 # Local Blockchain Databases
 *.db
 *.db-journal
 *.db-wal
+*.db-shm
 
 # Python caches
 __pycache__/
 *.pyc
+
+# Build artifacts
+build/
+dist/
+*.spec
+temp_addr.txt
 
 # Backups & Zips
 *.zip

@@ -10,7 +10,7 @@ import threading
 import json
 import time
 from typing import List, Set, Optional, Callable
-from urcoin.core import Block, Transaction
+from urcoin.core import Block, Transaction, GENESIS_HASH, MAX_BLOCKS_PER_REQUEST
 
 DEFAULT_P2P_PORT = 9333
 BUFFER_SIZE = 65536
@@ -29,13 +29,15 @@ class P2PNetwork:
                  on_new_block: Optional[Callable[[Block], None]] = None,
                  on_new_tx: Optional[Callable[[Transaction], None]] = None,
                  get_chain_info: Optional[Callable[[], dict]] = None,
-                 get_blocks_range: Optional[Callable[[int, int], List[Block]]] = None):
+                 get_blocks_range: Optional[Callable[[int, int], List[Block]]] = None,
+                 genesis_hash: str = GENESIS_HASH):
         self.host = host
         self.port = port
         self.on_new_block = on_new_block
         self.on_new_tx = on_new_tx
         self.get_chain_info = get_chain_info
         self.get_blocks_range = get_blocks_range
+        self.genesis_hash = genesis_hash
 
         self.running = False
         self.server_socket: Optional[socket.socket] = None
@@ -62,6 +64,14 @@ class P2PNetwork:
                 peer_str = f"{addr[0]}:{addr[1]}"
                 with self.lock:
                     self.peer_sockets.append(client_sock)
+                if self.get_chain_info:
+                    info = self.get_chain_info()
+                    self._send(client_sock, {
+                        "type": P2PMessage.HANDSHAKE,
+                        "height": info.get("height", 0),
+                        "best_hash": info.get("best_hash", ""),
+                        "genesis_hash": self.genesis_hash,
+                    })
                 handler = threading.Thread(target=self._handle_peer, args=(client_sock, peer_str), daemon=True)
                 handler.start()
             except Exception:
@@ -86,7 +96,8 @@ class P2PNetwork:
                 self._send(sock, {
                     "type": P2PMessage.HANDSHAKE,
                     "height": info.get("height", 0),
-                    "best_hash": info.get("best_hash", "")
+                    "best_hash": info.get("best_hash", ""),
+                    "genesis_hash": self.genesis_hash,
                 })
 
             handler = threading.Thread(target=self._handle_peer, args=(sock, peer_str), daemon=True)
@@ -150,21 +161,29 @@ class P2PNetwork:
         msg_type = msg.get("type")
 
         if msg_type == P2PMessage.HANDSHAKE:
+            peer_genesis = msg.get("genesis_hash", "")
+            if peer_genesis and peer_genesis != self.genesis_hash:
+                print(f"[P2P] Rejected {peer_str}: different genesis chain")
+                sock.close()
+                return
             peer_height = msg.get("height", 0)
             if self.get_chain_info:
                 local_info = self.get_chain_info()
                 local_height = local_info.get("height", 0)
-                # If peer is further ahead, request missing blocks
                 if peer_height > local_height:
                     self._send(sock, {
                         "type": P2PMessage.GET_BLOCKS,
                         "from_height": local_height + 1,
-                        "to_height": peer_height
+                        "to_height": min(peer_height, local_height + MAX_BLOCKS_PER_REQUEST)
                     })
 
         elif msg_type == P2PMessage.GET_BLOCKS:
             from_h = msg.get("from_height", 0)
             to_h = msg.get("to_height", from_h + 100)
+            if to_h < from_h:
+                return
+            if to_h - from_h >= MAX_BLOCKS_PER_REQUEST:
+                to_h = from_h + MAX_BLOCKS_PER_REQUEST - 1
             if self.get_blocks_range:
                 blocks = self.get_blocks_range(from_h, to_h)
                 self._send(sock, {

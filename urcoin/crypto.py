@@ -76,6 +76,16 @@ def base58check_decode(addr: str) -> bytes:
         raise ValueError("Invalid address checksum")
     return data[1:] # strip 1-byte prefix
 
+def is_valid_address(addr: str) -> bool:
+    """Return True if addr is a checksummed urc1... address."""
+    if not isinstance(addr, str) or not addr.startswith("urc1") or len(addr) < 8:
+        return False
+    try:
+        payload = base58check_decode(addr[4:])
+        return len(payload) == 20
+    except (ValueError, Exception):
+        return False
+
 # -------------------------------------------------------------
 # SECP256K1 Key Pair & Wallet Primitives
 # -------------------------------------------------------------
@@ -167,6 +177,13 @@ def mnemonic_to_seed(mnemonic: str) -> bytes:
 # Verification complexity: Light verifier only computes 32 items on-the-fly (~0.8 ms).
 DEFAULT_DAG_ITEMS = 16_777_216 # 1.0 GB
 DEFAULT_ROUNDS = 32
+
+def get_epoch_seed(epoch_number: int) -> bytes:
+    """Derive deterministic 32-byte epoch seed for DAG."""
+    seed = b"urcoin_epoch_seed_init_v1"
+    for _ in range(epoch_number + 1):
+        seed = hashlib.sha256(seed).digest()
+    return seed
 
 def rotr64(x: int, n: int) -> int:
     return ((x >> n) | ((x << (64 - n)) & 0xFFFFFFFFFFFFFFFF)) & 0xFFFFFFFFFFFFFFFF

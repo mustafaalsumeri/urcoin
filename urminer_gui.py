@@ -29,6 +29,7 @@ if sys.stdout.encoding != 'utf-8':
 from urcoin.miner_gpu import GPUMiner, get_opencl_devices
 from urcoin.core import Block, BlockHeader, Transaction, calculate_block_reward, COIN, DEFAULT_DAG_ITEMS
 from urcoin.wallet import Wallet
+from urcoin.auth import RPC_COOKIE_HEADER, read_rpc_cookie
 
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
@@ -379,6 +380,21 @@ class UrMinerApp(ctk.CTk):
         self.mining_thread = threading.Thread(target=self._mining_loop, args=(dag_items,), daemon=True)
         self.mining_thread.start()
 
+    def _rpc_call(self, endpoint: str, data: dict = None, timeout: int = 5) -> dict:
+        url = f"{self.node_url.rstrip('/')}{endpoint}"
+        headers = {}
+        cookie = read_rpc_cookie()
+        if cookie:
+            headers[RPC_COOKIE_HEADER] = cookie
+        if data is not None:
+            payload = json.dumps(data).encode("utf-8")
+            headers["Content-Type"] = "application/json"
+            req = urllib.request.Request(url, data=payload, headers=headers)
+        else:
+            req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
     def _stop_mining(self):
         self.is_mining = False
         self.btn_mine.configure(text="▶   START MINING", fg_color="#10b981", hover_color="#059669")
@@ -388,15 +404,28 @@ class UrMinerApp(ctk.CTk):
 
     def _mining_loop(self, dag_items: int):
         try:
+            # Check selected intensity profile
+            intensity = getattr(self, "intensity", "Balanced")
+            if intensity == "Light":
+                batch_threads = 4096
+                npt = 4
+                is_light = True
+            elif intensity == "Maximum":
+                batch_threads = 65536
+                npt = 16
+                is_light = False
+            else:
+                batch_threads = 16384
+                npt = 8
+                is_light = None # Auto-detect based on VRAM
+
             if not self.gpu_miner:
-                self.gpu_miner = GPUMiner(device_index=self.selected_device_idx, dag_items=dag_items)
+                self.gpu_miner = GPUMiner(device_index=self.selected_device_idx, dag_items=dag_items, light_mode=is_light)
 
             nonce_seq = 0
             while self.is_mining:
                 # 1. Fetch info from node
-                req = urllib.request.Request(f"{self.node_url}/api/info")
-                with urllib.request.urlopen(req, timeout=5) as resp:
-                    info = json.loads(resp.read().decode())
+                info = self._rpc_call("/api/info", timeout=5)
 
                 height = info["height"] + 1
                 best_hash = info["best_hash"]
@@ -414,9 +443,7 @@ class UrMinerApp(ctk.CTk):
                 candidate = Block(header, [coinbase_tx])
                 mining_hash = candidate.header.get_mining_hash()
 
-                # Search batch: 65536 threads * 32 nonces
-                batch_threads = 65536
-                npt = 32
+                # Search batch
                 t0 = time.perf_counter()
                 results = self.gpu_miner.search_batch(
                     mining_hash, target_int, epoch,
@@ -440,10 +467,7 @@ class UrMinerApp(ctk.CTk):
                     candidate.hash = block_hash
 
                     # Submit to node
-                    submit_payload = json.dumps(candidate.to_dict()).encode("utf-8")
-                    s_req = urllib.request.Request(f"{self.node_url}/api/submit_block", data=submit_payload, headers={"Content-Type": "application/json"})
-                    with urllib.request.urlopen(s_req, timeout=5) as s_resp:
-                        s_res = json.loads(s_resp.read().decode())
+                    s_res = self._rpc_call("/api/submit_block", data=candidate.to_dict(), timeout=5)
 
                     if s_res.get("success"):
                         self.blocks_found += 1
@@ -483,20 +507,16 @@ class UrMinerApp(ctk.CTk):
 
             # 2. Query node status & wallet balance
             try:
-                req = urllib.request.Request(f"{self.node_url}/api/wallet")
-                with urllib.request.urlopen(req, timeout=2) as resp:
-                    wdata = json.loads(resp.read().decode())
-                    bal = wdata["balance"] / COIN
-                    self.after(0, lambda b=bal: self.lbl_balance_val.configure(text=f"{b:.2f}"))
+                wdata = self._rpc_call("/api/wallet", timeout=2)
+                bal = wdata["balance"] / COIN
+                self.after(0, lambda b=bal: self.lbl_balance_val.configure(text=f"{b:.2f}"))
 
-                req_info = urllib.request.Request(f"{self.node_url}/api/info")
-                with urllib.request.urlopen(req_info, timeout=2) as resp:
-                    idata = json.loads(resp.read().decode())
-                    h = idata["height"]
-                    self.after(0, lambda h=h: (
-                        self.lbl_node_indicator.configure(text="● NODE CONNECTED", text_color="#10b981"),
-                        self.lbl_node_height.configure(text=f"Height: #{h}")
-                    ))
+                idata = self._rpc_call("/api/info", timeout=2)
+                h = idata["height"]
+                self.after(0, lambda h=h: (
+                    self.lbl_node_indicator.configure(text="● NODE CONNECTED", text_color="#10b981"),
+                    self.lbl_node_height.configure(text=f"Height: #{h}")
+                ))
             except Exception:
                 self.after(0, lambda: (
                     self.lbl_node_indicator.configure(text="○ NODE OFFLINE", text_color="#ef4444"),
@@ -519,10 +539,7 @@ class UrMinerApp(ctk.CTk):
 
         try:
             amount = float(amount_str)
-            payload = json.dumps({"recipient": recipient, "amount_urc": amount}).encode("utf-8")
-            req = urllib.request.Request(f"{self.node_url}/api/send_tx", data=payload, headers={"Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                res = json.loads(resp.read().decode())
+            res = self._rpc_call("/api/send_tx", data={"recipient": recipient, "amount_urc": amount}, timeout=5)
 
             if res.get("success"):
                 self._log(f"✓ Sent {amount} URC! TXID: {res['txid']}")

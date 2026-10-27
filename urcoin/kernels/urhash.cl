@@ -242,3 +242,67 @@ __kernel void urhash_miner_search(
         }
     }
 }
+
+// -------------------------------------------------------------
+// Kernel 3: Zero-VRAM Light GPU PoW Miner (For Weak / Low-VRAM GPUs)
+// Computes DAG lines on-the-fly without requiring 1.0 GB allocation in VRAM!
+// -------------------------------------------------------------
+__kernel void urhash_miner_search_light(
+    __global const ulong* epoch_seed_in,
+    __global const ulong* header_hash_in,
+    __global const uchar* target32,
+    ulong start_nonce,
+    ulong nonces_per_thread,
+    ulong num_items,
+    int rounds,
+    volatile __global uint* found_count,
+    __global ulong* found_nonces,
+    __global uchar* found_hashes
+) {
+    ulong tid = get_global_id(0);
+    ulong base_nonce = start_nonce + (tid * nonces_per_thread);
+
+    ulong epoch_seed[4];
+    epoch_seed[0] = epoch_seed_in[0];
+    epoch_seed[1] = epoch_seed_in[1];
+    epoch_seed[2] = epoch_seed_in[2];
+    epoch_seed[3] = epoch_seed_in[3];
+
+    ulong header[4];
+    header[0] = header_hash_in[0];
+    header[1] = header_hash_in[1];
+    header[2] = header_hash_in[2];
+    header[3] = header_hash_in[3];
+
+    for (ulong step = 0; step < nonces_per_thread; step++) {
+        if (*found_count >= 16) return;
+
+        ulong current_nonce = base_nonce + step;
+        ulong s[8];
+        blake2b_compress_40(header, current_nonce, s);
+
+        for (int r = 0; r < rounds; r++) {
+            ulong idx = (s[0] ^ s[r % 8] ^ ((ulong)r * 0x9E3779B97F4A7C15UL)) % num_items;
+            ulong dag_item[8];
+            blake2b_compress_40(epoch_seed, idx, dag_item);
+            for (int j = 0; j < 8; j++) {
+                s[j] = (ROTR64(s[j] ^ dag_item[j], 17) * 0x100000001b3UL) + (ulong)r;
+            }
+        }
+
+        uchar final_hash[32];
+        sha256_compress_64bytes(s, final_hash);
+
+        if (check_hash_target(final_hash, target32)) {
+            uint slot = atomic_inc(found_count);
+            if (slot < 16) {
+                found_nonces[slot] = current_nonce;
+                for (int b = 0; b < 32; b++) {
+                    found_hashes[slot * 32 + b] = final_hash[b];
+                }
+            }
+            return;
+        }
+    }
+}
+
