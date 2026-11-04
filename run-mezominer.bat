@@ -1,11 +1,12 @@
 @echo off
-title MezoMiner Pro Launcher
+title UrMiner Pro Desktop Launcher
+cd /d "%~dp0"
 echo ==================================================================
-echo          Starting MezoMiner Pro Desktop Interface...
+echo   Starting UrMiner Pro - Kryptex GPU Mining Suite for Ur Coin (URC)
 echo ==================================================================
-
-python gui_miner.py
-
-echo.
-echo [!] تم إيقاف البرنامج أو حدوث خطأ. راجع الرسالة أعلاه.
-pause
+python urminer_gui.py
+if %ERRORLEVEL% NEQ 0 (
+    echo.
+    echo [!] An error occurred while launching UrMiner GUI.
+    pause
+)

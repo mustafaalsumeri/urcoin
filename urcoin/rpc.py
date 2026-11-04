@@ -214,7 +214,20 @@ class UrCoinRPCServer:
                     self._send_html(html)
                     return
 
-                if path.startswith("/api/") and not self._check_cookie():
+                # Public read-only endpoints accessible to external explorers & markets without cookie
+                public_get_prefixes = (
+                    "/api/info",
+                    "/api/blocks",
+                    "/api/block/",
+                    "/api/exchange/ticker",
+                    "/api/exchange/orderbook",
+                    "/api/exchange/trades",
+                    "/api/v1/ticker",
+                    "/api/market"
+                )
+                is_public_get = any(path == p or path.startswith(p) for p in public_get_prefixes)
+
+                if path.startswith("/api/") and not is_public_get and not self._check_cookie():
                     self._send_json({"error": "Unauthorized"}, status=401)
                     return
 
@@ -274,6 +287,22 @@ class UrCoinRPCServer:
                     ticker = outer.storage.exchange.get_ticker()
                     self._send_json(ticker)
 
+                elif path == "/api/v1/ticker":
+                    # Standard CoinGecko / CoinMarketCap format for market aggregators
+                    ticker = outer.storage.exchange.get_ticker()
+                    self._send_json({
+                        "ticker_id": "URC_USDT",
+                        "base_currency": "URC",
+                        "target_currency": "USDT",
+                        "last_price": ticker["last_price"],
+                        "base_volume": ticker["volume_urc_24h"],
+                        "target_volume": ticker["volume_usdt_24h"],
+                        "bid": ticker["last_price"],
+                        "ask": ticker["last_price"],
+                        "high": ticker["high_24h"],
+                        "low": ticker["low_24h"],
+                    })
+
                 elif path == "/api/exchange/orderbook":
                     limit = int(parse_qs(parsed.query).get("limit", [20])[0])
                     book = outer.storage.exchange.get_order_book(limit=limit)
@@ -295,7 +324,8 @@ class UrCoinRPCServer:
             def do_POST(self):
                 parsed = urlparse(self.path)
                 path = parsed.path
-                if not self._check_cookie():
+                # Allow public block submission from miners; all other POSTs require RPC cookie
+                if path != "/api/submit_block" and not self._check_cookie():
                     self._send_json({"error": "Unauthorized"}, status=401)
                     return
                 length = int(self.headers.get("Content-Length", 0))

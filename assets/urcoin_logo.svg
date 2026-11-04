@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <radialGradient id="goldGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#fbbf24" stop-opacity="0.35"/>
+      <stop offset="70%" stop-color="#d97706" stop-opacity="0.1"/>
+      <stop offset="100%" stop-color="#000" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="goldRing" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fde047"/>
+      <stop offset="50%" stop-color="#f59e0b"/>
+      <stop offset="100%" stop-color="#b45309"/>
+    </linearGradient>
+    <radialGradient id="pearlShine" cx="35%" cy="35%" r="65%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="30%" stop-color="#e0f2fe"/>
+      <stop offset="65%" stop-color="#38bdf8"/>
+      <stop offset="90%" stop-color="#0284c7"/>
+      <stop offset="100%" stop-color="#0f172a"/>
+    </radialGradient>
+    <linearGradient id="circuitGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#06b6d4"/>
+      <stop offset="100%" stop-color="#10b981"/>
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="8" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+
+  <!-- Ambient Glow -->
+  <circle cx="256" cy="256" r="240" fill="url(#goldGlow)"/>
+
+  <!-- Outer Cyber Circuit Ring -->
+  <circle cx="256" cy="256" r="216" fill="none" stroke="url(#goldRing)" stroke-width="6" filter="url(#glow)"/>
+  <circle cx="256" cy="256" r="202" fill="none" stroke="#78350f" stroke-width="2" stroke-dasharray="6 6"/>
+  <circle cx="256" cy="256" r="188" fill="none" stroke="url(#goldRing)" stroke-width="4"/>
+
+  <!-- Circuit nodes around ring -->
+  <g stroke="url(#goldRing)" stroke-width="3">
+    <line x1="256" y1="40" x2="256" y2="68"/>
+    <line x1="256" y1="444" x2="256" y2="472"/>
+    <line x1="40" y1="256" x2="68" y2="256"/>
+    <line x1="444" y1="256" x2="472" y2="256"/>
+    <line x1="103" y1="103" x2="123" y2="123"/>
+    <line x1="409" y1="409" x2="389" y2="389"/>
+    <line x1="103" y1="409" x2="123" y2="389"/>
+    <line x1="409" y1="103" x2="389" y2="123"/>
+  </g>
+  <circle cx="256" cy="40" r="6" fill="#06b6d4"/>
+  <circle cx="256" cy="472" r="6" fill="#06b6d4"/>
+  <circle cx="40" cy="256" r="6" fill="#06b6d4"/>
+  <circle cx="472" cy="256" r="6" fill="#06b6d4"/>
+
+  <!-- 8-Pointed Mesopotamian Ur Celestial Sun-Star -->
+  <polygon points="256,76 280,185 383,129 327,232 436,256 327,280 383,383 280,327 256,436 232,327 129,383 185,280 76,256 185,232 129,129 232,185"
+           fill="url(#goldRing)" stroke="#fef08a" stroke-width="2"/>
+  
+  <polygon points="256,105 273,195 357,155 317,239 407,256 317,273 357,357 273,317 256,407 239,317 155,357 195,273 105,256 195,239 155,155 239,195"
+           fill="#b45309" opacity="0.85"/>
+
+  <!-- Central Luminescent Pearl Sphere -->
+  <circle cx="256" cy="256" r="82" fill="url(#pearlShine)" filter="url(#glow)"/>
+  <ellipse cx="232" cy="228" rx="26" ry="16" fill="#ffffff" opacity="0.75" transform="rotate(-30 232 228)"/>
+  <circle cx="218" cy="214" r="6" fill="#ffffff" opacity="0.95"/>
+
+  <!-- Central Text Monogram URC -->
+  <text x="256" y="270" text-anchor="middle" font-family="'Plus Jakarta Sans', Arial, sans-serif" font-weight="900" font-size="44" fill="#090d16" letter-spacing="1">URC</text>
+</svg>

@@ -1,11 +1,17 @@
 @echo off
-title Ur Coin (URC) - GPU OpenCL Miner
+title Ur Coin Mining Launcher
+cd /d "%~dp0"
 echo ==================================================================
-echo         Starting Ur Coin (URC) Standalone GPU Miner...
+echo   Ur Coin (URC) - Kryptex-Edition Mining Suite
 echo ==================================================================
-python -c "from urcoin.wallet import Wallet; w=Wallet.create_or_load(); print(w.address)" > temp_addr.txt
-set /p MINER_ADDR=<temp_addr.txt
-del temp_addr.txt
-echo Mining payout address: %MINER_ADDR%
-python urcoin_miner.py --address %MINER_ADDR%
-pause
+echo.
+echo Select Mining Mode:
+echo   [1] Launch UrMiner Pro Desktop GUI (Kryptex Edition - Recommended)
+echo   [2] Launch High-Speed Terminal GPU Miner (CLI)
+echo.
+set /p CHOICE="Enter choice [1 or 2, default is 1]: "
+if "%CHOICE%"=="2" (
+    call mine.bat
+) else (
+    call UrMiner.bat
+)

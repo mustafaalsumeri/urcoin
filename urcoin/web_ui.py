@@ -72,14 +72,12 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
         .coin-logo {
             width: 48px;
             height: 48px;
-            background: linear-gradient(135deg, #f59e0b, #d97706);
-            border-radius: 14px;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 24px;
-            font-weight: 800;
-            color: #000;
+            border-radius: 12px;
+            background: #111827;
+            border: 1px solid var(--border);
             box-shadow: 0 0 20px var(--primary-glow);
         }
 
@@ -624,7 +622,28 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
         <!-- Header -->
         <header>
             <div class="brand">
-                <div class="coin-logo">UR</div>
+                <div class="coin-logo">
+                    <svg viewBox="0 0 512 512" width="44" height="44">
+                      <defs>
+                        <radialGradient id="uiPearl" cx="35%" cy="35%" r="65%">
+                          <stop offset="0%" stop-color="#ffffff"/>
+                          <stop offset="35%" stop-color="#e0f2fe"/>
+                          <stop offset="70%" stop-color="#06b6d4"/>
+                          <stop offset="100%" stop-color="#0f172a"/>
+                        </radialGradient>
+                        <linearGradient id="uiGold" x1="0%" y1="0%" x2="100%" y2="100%">
+                          <stop offset="0%" stop-color="#fde047"/>
+                          <stop offset="60%" stop-color="#f59e0b"/>
+                          <stop offset="100%" stop-color="#b45309"/>
+                        </linearGradient>
+                      </defs>
+                      <circle cx="256" cy="256" r="230" fill="none" stroke="url(#uiGold)" stroke-width="12"/>
+                      <polygon points="256,60 280,180 395,120 335,235 452,256 335,277 395,392 280,332 256,452 232,332 117,392 177,277 60,256 177,235 117,120 232,180" fill="url(#uiGold)"/>
+                      <circle cx="256" cy="256" r="92" fill="url(#uiPearl)"/>
+                      <circle cx="218" cy="218" r="14" fill="#ffffff" opacity="0.85"/>
+                      <text x="256" y="272" text-anchor="middle" font-family="'Plus Jakarta Sans', sans-serif" font-weight="900" font-size="52" fill="#090d16">URC</text>
+                    </svg>
+                </div>
                 <div class="brand-title">
                     <h1>Ur Coin (URC)</h1>
                     <p>Next-Gen Tradable Cryptocurrency with Adaptive PoW for High & Low-End GPUs</p>

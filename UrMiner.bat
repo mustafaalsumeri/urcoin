@@ -1,12 +1,14 @@
 @echo off
-title Ur Coin (URC) - Adaptive Miner (Weak/Strong GPUs & CPU)
+title UrMiner Pro - Kryptex GPU Mining Suite
+cd /d "%~dp0"
 echo ==================================================================
-echo         Starting Ur Coin (URC) Adaptive Miner...
-echo         Compatible with Low-End / High-End GPUs and CPUs
+echo   Starting UrMiner Pro - Kryptex GPU Mining Suite for Ur Coin (URC)
+echo   Hardware Accelerated PoW (NVIDIA / AMD / Intel / CPU)
 echo ==================================================================
-python -c "from urcoin.wallet import Wallet; w=Wallet.create_or_load(); print(w.address)" > temp_addr.txt
-set /p MINER_ADDR=<temp_addr.txt
-del temp_addr.txt
-echo Mining payout address: %MINER_ADDR%
-python urcoin_miner.py --address %MINER_ADDR% --profile eco
-pause
+python urminer_gui.py
+if %ERRORLEVEL% NEQ 0 (
+    echo.
+    echo [!] An error occurred while launching UrMiner GUI.
+    echo Press any key to exit...
+    pause >nul
+)
