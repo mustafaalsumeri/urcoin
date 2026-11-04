@@ -15,7 +15,8 @@ from urcoin.auth import get_wallet_password
 from urcoin.crypto import KeyPair, generate_mnemonic, mnemonic_to_seed, is_valid_address
 from urcoin.core import Transaction, TxIn, TxOut, COIN
 
-DEFAULT_WALLET_PATH = "urcoin_wallet.json"
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DEFAULT_WALLET_PATH = os.path.join(BASE_DIR, "urcoin_wallet.json")
 
 
 def _derive_keys(password: str, salt: bytes) -> tuple:

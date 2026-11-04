@@ -7,8 +7,10 @@ import os
 import secrets
 from typing import Optional
 
-DEFAULT_COOKIE_PATH = "urcoin.cookie"
-DEFAULT_WALLET_PASS_PATH = "urcoin.walletpass"
+# Absolute base directory of the Ur Coin installation
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DEFAULT_COOKIE_PATH = os.path.join(BASE_DIR, "urcoin.cookie")
+DEFAULT_WALLET_PASS_PATH = os.path.join(BASE_DIR, "urcoin.walletpass")
 RPC_COOKIE_HEADER = "X-Urcoin-Rpc-Cookie"
 
 

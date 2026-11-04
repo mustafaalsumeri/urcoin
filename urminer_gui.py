@@ -16,6 +16,11 @@ import urllib.error
 import customtkinter as ctk
 from PIL import Image
 
+# Ensure current working directory is ALWAYS the project directory
+PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
+os.chdir(PROJECT_DIR)
+sys.path.insert(0, PROJECT_DIR)
+
 # Ensure UTF-8 output on Windows
 if sys.stdout.encoding != 'utf-8':
     try:
@@ -47,7 +52,6 @@ from urcoin.auth import RPC_COOKIE_HEADER, read_rpc_cookie
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
-PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 ASSETS_DIR = os.path.join(PROJECT_DIR, "assets")
 LOGO_PNG = os.path.join(ASSETS_DIR, "urcoin_logo.png")
 LOGO_ICO = os.path.join(ASSETS_DIR, "urcoin_logo.ico")
@@ -58,8 +62,8 @@ class UrMinerApp(ctk.CTk):
         super().__init__()
 
         self.title("UrMiner Pro - Kryptex GPU Mining Suite (Ur Coin)")
-        self.geometry("1060x740")
-        self.minsize(980, 680)
+        self.geometry("1080x760")
+        self.minsize(980, 700)
         self.configure(fg_color="#090d16")
 
         # Set Window Icon
@@ -68,6 +72,9 @@ class UrMinerApp(ctk.CTk):
                 self.iconbitmap(LOGO_ICO)
             except Exception:
                 pass
+
+        # App Lifetime Flag
+        self.running = True
 
         # Mining State Variables
         self.is_mining = False
@@ -87,7 +94,6 @@ class UrMinerApp(ctk.CTk):
         self.total_hashes = 0
         self.current_hashrate = 0.0  # in H/s
         self.market_price_usdt = 0.0520  # Live price from UrDEX
-        self.daily_reward_est = 0.0
         self.confirmed_balance_urc = 0.0
 
         # Hardware Safety Settings
@@ -102,10 +108,21 @@ class UrMinerApp(ctk.CTk):
         }
 
         # Wallet & Node RPC
-        self.wallet = Wallet.create_or_load(os.path.join(PROJECT_DIR, "urcoin_wallet.json"))
+        wallet_path = os.path.join(PROJECT_DIR, "urcoin_wallet.json")
+        try:
+            self.wallet = Wallet.create_or_load(wallet_path)
+        except Exception as e:
+            # Fallback if existing wallet was corrupted or encrypted with different pass
+            self.wallet = Wallet()
+            try:
+                self.wallet.save_to_file(wallet_path)
+            except Exception:
+                pass
+
         self.node_url = "http://127.0.0.1:9334"
         self.node_connected = False
         self.node_height = 0
+        self.node_process = None
 
         # NVML Initialization
         self.nvml_initialized = False
@@ -116,13 +133,29 @@ class UrMinerApp(ctk.CTk):
             except Exception:
                 self.nvml_initialized = False
 
+        # Setup Clean Window Closing Protocol
+        self.protocol("WM_DELETE_WINDOW", self._on_closing)
+
         # Setup GUI Structure
         self._setup_ui()
 
         # Start Telemetry & Node Polling Background Thread
-        self.running = True
         self.telemetry_thread = threading.Thread(target=self._telemetry_worker, daemon=True)
         self.telemetry_thread.start()
+
+    def _safe_after(self, delay_ms, func, *args):
+        """Thread-safe UI callback that avoids RuntimeError if window is closed."""
+        if getattr(self, "running", False):
+            try:
+                self.after(delay_ms, func, *args)
+            except Exception:
+                pass
+
+    def _on_closing(self):
+        """Clean shutdown handler."""
+        self.running = False
+        self.is_mining = False
+        self.destroy()
 
     def _setup_ui(self):
         self.grid_columnconfigure(1, weight=1)
@@ -213,7 +246,7 @@ class UrMinerApp(ctk.CTk):
         self.lbl_node_info.pack(pady=(0, 4))
 
         self.btn_node_action = ctk.CTkButton(
-            self.node_card, text="Launch Local Node", height=28,
+            self.node_card, text="Start Local Node", height=28,
             fg_color="#06b6d4", hover_color="#0284c7",
             font=ctk.CTkFont(size=11, weight="bold"),
             command=self._launch_node_daemon
@@ -247,11 +280,11 @@ class UrMinerApp(ctk.CTk):
     # TAB 1: MINING DASHBOARD (Kryptex Style)
     # =========================================================================
     def _build_dashboard_tab(self):
-        self.tab_dashboard.grid_columnconfigure((0, 1, 2), weight=1)
+        self.tab_dashboard.grid_columnconfigure((0, 1, 2, 3), weight=1)
 
         # 1. Main Mining Banner Card
         self.banner_card = ctk.CTkFrame(self.tab_dashboard, fg_color="#111827", corner_radius=16, border_width=1, border_color="#1e293b")
-        self.banner_card.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 14), ipady=8)
+        self.banner_card.grid(row=0, column=0, columnspan=4, sticky="ew", pady=(0, 14), ipady=8)
 
         self.btn_mine = ctk.CTkButton(
             self.banner_card, text="▶   START MINING",
@@ -279,7 +312,7 @@ class UrMinerApp(ctk.CTk):
         self.lbl_gpu_header.pack(anchor="w", pady=(2, 0))
 
         self.lbl_timer = ctk.CTkLabel(
-            self.banner_info, text="Uptime: 00:00:00  |  Profile: Smart Eco (Zero-VRAM)",
+            self.banner_info, text="Uptime: 00:00:00  |  Profile: SMART ECO (ZERO-VRAM)",
             font=ctk.CTkFont(size=11), text_color="#64748b"
         )
         self.lbl_timer.pack(anchor="w", pady=(2, 0))
@@ -292,37 +325,46 @@ class UrMinerApp(ctk.CTk):
         )
         self.lbl_thermal_msg.pack(padx=16, pady=8)
 
-        # 2. Main Metrics Grid (4 Cards)
+        # 2. Main Metrics Grid (4 Cards Side-by-Side)
         # Metric 1: Hashrate
         self.card_hashrate = ctk.CTkFrame(self.tab_dashboard, fg_color="#111827", corner_radius=14, border_width=1, border_color="#1e293b")
-        self.card_hashrate.grid(row=2, column=0, sticky="nsew", padx=(0, 6), pady=(0, 14), ipady=10)
-        ctk.CTkLabel(self.card_hashrate, text="CURRENT HASHRATE", font=ctk.CTkFont(size=11, weight="bold"), text_color="#94a3b8").pack(pady=(10, 2))
-        self.lbl_hashrate_val = ctk.CTkLabel(self.card_hashrate, text="0.00", font=ctk.CTkFont(family="JetBrains Mono", size=30, weight="bold"), text_color="#f59e0b")
+        self.card_hashrate.grid(row=2, column=0, sticky="nsew", padx=(0, 5), pady=(0, 14), ipady=10)
+        ctk.CTkLabel(self.card_hashrate, text="CURRENT HASHRATE", font=ctk.CTkFont(size=10, weight="bold"), text_color="#94a3b8").pack(pady=(10, 2))
+        self.lbl_hashrate_val = ctk.CTkLabel(self.card_hashrate, text="0.00", font=ctk.CTkFont(family="JetBrains Mono", size=26, weight="bold"), text_color="#f59e0b")
         self.lbl_hashrate_val.pack()
-        self.lbl_hashrate_unit = ctk.CTkLabel(self.card_hashrate, text="MH/s  (UrHash-v1)", font=ctk.CTkFont(size=11), text_color="#64748b")
+        self.lbl_hashrate_unit = ctk.CTkLabel(self.card_hashrate, text="MH/s  (UrHash-v1)", font=ctk.CTkFont(size=10), text_color="#64748b")
         self.lbl_hashrate_unit.pack(pady=(0, 10))
 
         # Metric 2: Estimated Daily Earnings (Kryptex Profit Calculator)
         self.card_earnings = ctk.CTkFrame(self.tab_dashboard, fg_color="#111827", corner_radius=14, border_width=1, border_color="#1e293b")
-        self.card_earnings.grid(row=2, column=1, sticky="nsew", padx=6, pady=(0, 14), ipady=10)
-        ctk.CTkLabel(self.card_earnings, text="ESTIMATED DAILY PROFIT", font=ctk.CTkFont(size=11, weight="bold"), text_color="#94a3b8").pack(pady=(10, 2))
-        self.lbl_daily_profit_usd = ctk.CTkLabel(self.card_earnings, text="$0.00", font=ctk.CTkFont(family="JetBrains Mono", size=30, weight="bold"), text_color="#10b981")
+        self.card_earnings.grid(row=2, column=1, sticky="nsew", padx=5, pady=(0, 14), ipady=10)
+        ctk.CTkLabel(self.card_earnings, text="ESTIMATED DAILY PROFIT", font=ctk.CTkFont(size=10, weight="bold"), text_color="#94a3b8").pack(pady=(10, 2))
+        self.lbl_daily_profit_usd = ctk.CTkLabel(self.card_earnings, text="$0.00", font=ctk.CTkFont(family="JetBrains Mono", size=26, weight="bold"), text_color="#10b981")
         self.lbl_daily_profit_usd.pack()
-        self.lbl_daily_profit_urc = ctk.CTkLabel(self.card_earnings, text="~0.00 URC / day", font=ctk.CTkFont(size=11), text_color="#64748b")
+        self.lbl_daily_profit_urc = ctk.CTkLabel(self.card_earnings, text="~0.00 URC / day", font=ctk.CTkFont(size=10), text_color="#64748b")
         self.lbl_daily_profit_urc.pack(pady=(0, 10))
 
         # Metric 3: Blocks Found & Mined
         self.card_blocks = ctk.CTkFrame(self.tab_dashboard, fg_color="#111827", corner_radius=14, border_width=1, border_color="#1e293b")
-        self.card_blocks.grid(row=2, column=2, sticky="nsew", padx=(6, 0), pady=(0, 14), ipady=10)
-        ctk.CTkLabel(self.card_blocks, text="BLOCKS MINED (REWARDS)", font=ctk.CTkFont(size=11, weight="bold"), text_color="#94a3b8").pack(pady=(10, 2))
-        self.lbl_blocks_val = ctk.CTkLabel(self.card_blocks, text="0", font=ctk.CTkFont(family="JetBrains Mono", size=30, weight="bold"), text_color="#38bdf8")
+        self.card_blocks.grid(row=2, column=2, sticky="nsew", padx=5, pady=(0, 14), ipady=10)
+        ctk.CTkLabel(self.card_blocks, text="BLOCKS MINED", font=ctk.CTkFont(size=10, weight="bold"), text_color="#94a3b8").pack(pady=(10, 2))
+        self.lbl_blocks_val = ctk.CTkLabel(self.card_blocks, text="0", font=ctk.CTkFont(family="JetBrains Mono", size=26, weight="bold"), text_color="#38bdf8")
         self.lbl_blocks_val.pack()
-        self.lbl_blocks_earned = ctk.CTkLabel(self.card_blocks, text="Total: 0 URC ($0.00)", font=ctk.CTkFont(size=11), text_color="#64748b")
+        self.lbl_blocks_earned = ctk.CTkLabel(self.card_blocks, text="Earned: 0 URC", font=ctk.CTkFont(size=10), text_color="#64748b")
         self.lbl_blocks_earned.pack(pady=(0, 10))
+
+        # Metric 4: Total Confirmed Balance
+        self.card_bal = ctk.CTkFrame(self.tab_dashboard, fg_color="#111827", corner_radius=14, border_width=1, border_color="#1e293b")
+        self.card_bal.grid(row=2, column=3, sticky="nsew", padx=(5, 0), pady=(0, 14), ipady=10)
+        ctk.CTkLabel(self.card_bal, text="CONFIRMED BALANCE", font=ctk.CTkFont(size=10, weight="bold"), text_color="#94a3b8").pack(pady=(10, 2))
+        self.lbl_dash_balance = ctk.CTkLabel(self.card_bal, text="0.00", font=ctk.CTkFont(family="JetBrains Mono", size=26, weight="bold"), text_color="#f8fafc")
+        self.lbl_dash_balance.pack()
+        self.lbl_dash_balance_usd = ctk.CTkLabel(self.card_bal, text="≈ $0.00 USDT", font=ctk.CTkFont(size=10), text_color="#f59e0b")
+        self.lbl_dash_balance_usd.pack(pady=(0, 10))
 
         # 3. Kryptex Real Hardware Telemetry Bar
         self.card_hardware = ctk.CTkFrame(self.tab_dashboard, fg_color="#0e1524", corner_radius=14, border_width=1, border_color="#1e293b")
-        self.card_hardware.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(0, 14), ipady=4)
+        self.card_hardware.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(0, 14), ipady=4)
         self.card_hardware.grid_columnconfigure((0, 1, 2, 3, 4), weight=1)
 
         self.tele_temp = self._create_telemetry_item(self.card_hardware, 0, "GPU TEMP", "-- °C", "#10b981")
@@ -333,7 +375,7 @@ class UrMinerApp(ctk.CTk):
 
         # 4. Live Activity Log Console
         self.log_frame = ctk.CTkFrame(self.tab_dashboard, fg_color="#080c14", corner_radius=14, border_width=1, border_color="#1e293b")
-        self.log_frame.grid(row=4, column=0, columnspan=3, sticky="nsew")
+        self.log_frame.grid(row=4, column=0, columnspan=4, sticky="nsew")
         self.tab_dashboard.grid_rowconfigure(4, weight=1)
 
         self.log_box = ctk.CTkTextbox(
@@ -392,11 +434,8 @@ class UrMinerApp(ctk.CTk):
         self.bench_results_frame.pack(fill="both", expand=True, padx=4)
         self.bench_results_frame.grid_columnconfigure((0, 1, 2), weight=1)
 
-        # Result 1: Smart Eco Mode
         self.card_bench_eco = self._build_bench_card(self.bench_results_frame, 0, "Smart Eco GPU Mode", "Zero-VRAM Light PoW", "-- kH/s", "-- W", "$0.00 / day")
-        # Result 2: Pro Max Mode
         self.card_bench_pro = self._build_bench_card(self.bench_results_frame, 1, "Pro Max GPU Mode", "1.0 GB Memory-Hard DAG", "-- MH/s", "-- W", "$0.00 / day", highlight=True)
-        # Result 3: CPU Multi-threading
         self.card_bench_cpu = self._build_bench_card(self.bench_results_frame, 2, "CPU Multi-Core Worker", "Multi-Threaded PoW", "-- kH/s", "-- W", "$0.00 / day")
 
     def _build_bench_card(self, parent, col, title, subtitle, hashrate, power, earnings, highlight=False):
@@ -474,6 +513,7 @@ class UrMinerApp(ctk.CTk):
         ctk.CTkLabel(card_swap, text="Amount of URC to Sell", font=ctk.CTkFont(size=11), text_color="#94a3b8").pack(padx=20, anchor="w")
         self.entry_swap_amt = ctk.CTkEntry(card_swap, height=38, font=ctk.CTkFont(family="JetBrains Mono", size=12), fg_color="#090d16", border_color="#1e293b", placeholder_text="e.g. 100.0")
         self.entry_swap_amt.pack(fill="x", padx=20, pady=(4, 10))
+        self.entry_swap_amt.bind("<KeyRelease>", self._on_swap_amt_change)
 
         self.lbl_swap_quote = ctk.CTkLabel(card_swap, text="Estimated Output: ~0.00 USDT (Rate: $0.0520)", font=ctk.CTkFont(size=11), text_color="#64748b")
         self.lbl_swap_quote.pack(padx=20, pady=(0, 16), anchor="w")
@@ -484,6 +524,15 @@ class UrMinerApp(ctk.CTk):
             command=self._execute_swap
         )
         btn_swap.pack(fill="x", padx=20, pady=(0, 14))
+
+    def _on_swap_amt_change(self, event=None):
+        val = self.entry_swap_amt.get().strip()
+        try:
+            amt = float(val)
+            out = amt * self.market_price_usdt
+            self.lbl_swap_quote.configure(text=f"Estimated Output: ~{out:.2f} USDT (Rate: ${self.market_price_usdt:.4f})", text_color="#10b981")
+        except Exception:
+            self.lbl_swap_quote.configure(text=f"Estimated Output: ~0.00 USDT (Rate: ${self.market_price_usdt:.4f})", text_color="#64748b")
 
     # =========================================================================
     # TAB 4: URDEX MARKET & TICKER
@@ -542,7 +591,7 @@ class UrMinerApp(ctk.CTk):
         dev_options = [f"GPU {i}: {d.device_name} ({d.memory_gb:.2f} GB)" for i, d in enumerate(self.devices)]
         if not dev_options:
             dev_options = ["CPU Worker (OpenCL Not Detected)"]
-        self.combo_device = ctk.CTkComboBox(card_sett, values=dev_options, height=38, width=480, font=ctk.CTkFont(size=12))
+        self.combo_device = ctk.CTkComboBox(card_sett, values=dev_options, height=38, width=520, font=ctk.CTkFont(size=12), command=self._on_device_selected)
         self.combo_device.set(dev_options[0])
         self.combo_device.pack(padx=20, pady=(0, 16), anchor="w")
 
@@ -561,6 +610,15 @@ class UrMinerApp(ctk.CTk):
         self.entry_node_url = ctk.CTkEntry(card_sett, height=38, font=ctk.CTkFont(family="JetBrains Mono", size=12), fg_color="#090d16", border_color="#1e293b")
         self.entry_node_url.insert(0, self.node_url)
         self.entry_node_url.pack(fill="x", padx=20, pady=(0, 16))
+
+    def _on_device_selected(self, choice):
+        for i, d in enumerate(self.devices):
+            if d.device_name in choice:
+                self.selected_device_idx = i
+                self.gpu_miner = None
+                self._log(f"Switched hardware accelerator to: {d.device_name}")
+                self.lbl_gpu_header.configure(text=f"Active Device: {d.device_name}")
+                break
 
     def _on_temp_slider(self, val):
         self.max_temp_limit = float(val)
@@ -597,10 +655,12 @@ class UrMinerApp(ctk.CTk):
     def _log(self, msg: str):
         timestamp = time.strftime("%H:%M:%S")
         line = f"[{timestamp}] {msg}\n"
-        self.log_box.insert("end", line)
-        self.log_box.see("end")
+        self._safe_after(0, lambda: (
+            self.log_box.insert("end", line),
+            self.log_box.see("end")
+        ))
 
-    def _rpc_call(self, endpoint: str, data: dict = None, timeout: int = 5) -> dict:
+    def _rpc_call(self, endpoint: str, data: dict = None, timeout: int = 4) -> dict:
         url = f"{self.node_url.rstrip('/')}{endpoint}"
         headers = {}
         cookie = read_rpc_cookie()
@@ -624,6 +684,28 @@ class UrMinerApp(ctk.CTk):
         else:
             self._stop_mining()
 
+    def _ensure_node_running(self) -> bool:
+        """Check if local node daemon is running; if not, auto-launch it."""
+        try:
+            self._rpc_call("/api/info", timeout=2)
+            return True
+        except Exception:
+            pass
+
+        self._log("Node not detected. Auto-launching local Ur Coin daemon in background...")
+        self._launch_node_daemon()
+
+        # Wait up to 5 seconds for node to respond
+        for _ in range(10):
+            time.sleep(0.5)
+            try:
+                self._rpc_call("/api/info", timeout=2)
+                self._log("✓ Local Node Daemon connected successfully!")
+                return True
+            except Exception:
+                pass
+        return False
+
     def _start_mining(self):
         if self.is_benchmarking:
             self._log("Cannot mine while benchmark is in progress.")
@@ -646,16 +728,24 @@ class UrMinerApp(ctk.CTk):
     def _stop_mining(self):
         self.is_mining = False
         self.is_paused_thermal = False
-        self.btn_mine.configure(text="▶   START MINING", fg_color="#10b981", hover_color="#059669")
-        self.lbl_status.configure(text="IDLE - MINER STOPPED", text_color="#94a3b8")
-        self.lbl_hashrate_val.configure(text="0.00")
-        self.lbl_daily_profit_usd.configure(text="$0.00")
-        self.lbl_daily_profit_urc.configure(text="~0.00 URC / day")
-        self.thermal_banner.grid_forget()
+        self._safe_after(0, lambda: (
+            self.btn_mine.configure(text="▶   START MINING", fg_color="#10b981", hover_color="#059669"),
+            self.lbl_status.configure(text="IDLE - MINER STOPPED", text_color="#94a3b8"),
+            self.lbl_hashrate_val.configure(text="0.00"),
+            self.lbl_daily_profit_usd.configure(text="$0.00"),
+            self.lbl_daily_profit_urc.configure(text="~0.00 URC / day"),
+            self.thermal_banner.grid_forget()
+        ))
         self._log("Mining engine stopped.")
 
     def _mining_loop(self, profile: str):
         try:
+            # 1. Ensure Node is Online
+            if not self._ensure_node_running():
+                self._log("Error: Could not connect to Ur Coin node daemon. Please ensure urcoind is running.")
+                self._stop_mining()
+                return
+
             # Configure batch parameters
             if profile == "eco":
                 batch_threads = 4096
@@ -682,13 +772,13 @@ class UrMinerApp(ctk.CTk):
                 current_temp = self.telemetry.get("temp_val", 0)
                 if current_temp >= self.max_temp_limit and not self.is_paused_thermal:
                     self.is_paused_thermal = True
-                    self.after(0, self._show_thermal_pause)
+                    self._safe_after(0, self._show_thermal_pause)
                     self._log(f"⚠️ THERMAL LIMIT: GPU reached {current_temp}°C! Pausing to cool down...")
 
                 if self.is_paused_thermal:
                     if current_temp <= self.auto_resume_temp:
                         self.is_paused_thermal = False
-                        self.after(0, self._hide_thermal_pause)
+                        self._safe_after(0, self._hide_thermal_pause)
                         self._log(f"✓ GPU Cooled down to {current_temp}°C. Resuming mining automatically!")
                     else:
                         time.sleep(1.0)
@@ -732,7 +822,7 @@ class UrMinerApp(ctk.CTk):
                 if dt > 0:
                     speed_mhs = ((batch_threads * npt) / dt) / 1_000_000
                     self.current_hashrate = (batch_threads * npt) / dt
-                    self.after(0, lambda s=speed_mhs: self._update_speed_and_earnings(s))
+                    self._safe_after(0, lambda s=speed_mhs: self._update_speed_and_earnings(s))
 
                 # 5. Winning Nonce Found!
                 if results:
@@ -745,10 +835,9 @@ class UrMinerApp(ctk.CTk):
                         if s_res.get("success"):
                             self.blocks_found += 1
                             earned_urc = self.blocks_found * (reward / COIN)
-                            earned_usd = earned_urc * self.market_price_usdt
-                            self.after(0, lambda bf=self.blocks_found, u=earned_urc, d=earned_usd: (
+                            self._safe_after(0, lambda bf=self.blocks_found, u=earned_urc: (
                                 self.lbl_blocks_val.configure(text=str(bf)),
-                                self.lbl_blocks_earned.configure(text=f"Total: {u:.0f} URC (${d:.2f})")
+                                self.lbl_blocks_earned.configure(text=f"Earned: {u:.0f} URC")
                             ))
                             self._log(f"🎉 BLOCK #{height} FOUND! Hash: {block_hash[:18]}... Nonce: {winning_nonce}")
                             nonce_seq = 0
@@ -757,10 +846,10 @@ class UrMinerApp(ctk.CTk):
 
         except Exception as e:
             self._log(f"Mining engine exception: {e}")
-            self.after(0, self._stop_mining)
+            self._stop_mining()
 
     def _show_thermal_pause(self):
-        self.thermal_banner.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(0, 10))
+        self.thermal_banner.grid(row=1, column=0, columnspan=4, sticky="ew", pady=(0, 10))
         self.lbl_status.configure(text="⚠️ THERMAL PAUSE", text_color="#ef4444")
         self.lbl_hashrate_val.configure(text="0.00")
 
@@ -769,12 +858,16 @@ class UrMinerApp(ctk.CTk):
         self.lbl_status.configure(text="● MINING ACTIVE", text_color="#10b981")
 
     def _update_speed_and_earnings(self, speed_mhs: float):
-        self.lbl_hashrate_val.configure(text=f"{speed_mhs:.2f}")
+        if speed_mhs >= 1.0:
+            self.lbl_hashrate_val.configure(text=f"{speed_mhs:.2f}")
+            self.lbl_hashrate_unit.configure(text="MH/s  (UrHash-v1)")
+        else:
+            speed_khs = speed_mhs * 1000.0
+            self.lbl_hashrate_val.configure(text=f"{speed_khs:.1f}")
+            self.lbl_hashrate_unit.configure(text="kH/s  (UrHash-v1)")
 
         # Kryptex Dynamic Profit Calculation
-        # Network difficulty ~ 30s block time
-        daily_blocks_est = 2880  # 86400 / 30
-        daily_urc = speed_mhs * 24.5  # Realistic hashrate share projection
+        daily_urc = speed_mhs * 24.5
         daily_usd = daily_urc * self.market_price_usdt
 
         self.lbl_daily_profit_usd.configure(text=f"${daily_usd:.2f}")
@@ -805,12 +898,13 @@ class UrMinerApp(ctk.CTk):
 
     def _benchmark_worker(self):
         try:
-            dummy_header = b"urcoin_benchmark_test_header_32"
+            import hashlib
+            dummy_header = hashlib.sha256(b"urcoin_benchmark_job_sample").digest()
             easy_target = int("0000ffff00000000000000000000000000000000000000000000000000000000", 16)
 
             # Stage 1: Smart Eco Mode
-            self.after(0, lambda: self.lbl_bench_status.configure(text="Phase 1/3: Benchmarking Smart Eco Mode (Zero-VRAM)..."))
-            self.after(0, lambda: self.progress_bench.set(0.15))
+            self._safe_after(0, lambda: self.lbl_bench_status.configure(text="Phase 1/3: Benchmarking Smart Eco Mode (Zero-VRAM)..."))
+            self._safe_after(0, lambda: self.progress_bench.set(0.15))
             m_eco = GPUMiner(device_index=self.selected_device_idx, light_mode=True)
             t0 = time.perf_counter()
             m_eco.search_batch(dummy_header, easy_target, epoch=0, start_nonce=0, global_work_size=8192, nonces_per_thread=8)
@@ -818,17 +912,17 @@ class UrMinerApp(ctk.CTk):
             eco_speed = (8192 * 8) / dt_eco if dt_eco > 0 else 0
             eco_power = float(self.telemetry.get("power_val", 45.0))
             eco_daily_usd = (eco_speed / 100_000) * self.market_price_usdt * 12.0
-            self.after(0, lambda: (
+            self._safe_after(0, lambda: (
                 self.card_bench_eco["hashrate"].configure(text=f"{eco_speed / 1000:.1f} kH/s"),
                 self.card_bench_eco["power"].configure(text=f"{eco_power:.0f} W"),
                 self.card_bench_eco["earnings"].configure(text=f"${eco_daily_usd:.2f} / day")
             ))
 
-            self.after(0, lambda: self.progress_bench.set(0.50))
+            self._safe_after(0, lambda: self.progress_bench.set(0.50))
             time.sleep(0.5)
 
             # Stage 2: Pro Max Mode
-            self.after(0, lambda: self.lbl_bench_status.configure(text="Phase 2/3: Benchmarking Pro Max Mode (Full DAG)..."))
+            self._safe_after(0, lambda: self.lbl_bench_status.configure(text="Phase 2/3: Benchmarking Pro Max Mode (Full DAG)..."))
             m_pro = GPUMiner(device_index=self.selected_device_idx, light_mode=False)
             t0 = time.perf_counter()
             m_pro.search_batch(dummy_header, easy_target, epoch=0, start_nonce=0, global_work_size=32768, nonces_per_thread=16)
@@ -836,39 +930,39 @@ class UrMinerApp(ctk.CTk):
             pro_speed = (32768 * 16) / dt_pro if dt_pro > 0 else 0
             pro_power = float(self.telemetry.get("power_val", 60.0))
             pro_daily_usd = (pro_speed / 1_000_000) * 24.5 * self.market_price_usdt
-            self.after(0, lambda: (
+            self._safe_after(0, lambda: (
                 self.card_bench_pro["hashrate"].configure(text=f"{pro_speed / 1_000_000:.2f} MH/s"),
                 self.card_bench_pro["power"].configure(text=f"{pro_power:.0f} W"),
                 self.card_bench_pro["earnings"].configure(text=f"${pro_daily_usd:.2f} / day")
             ))
 
-            self.after(0, lambda: self.progress_bench.set(0.85))
+            self._safe_after(0, lambda: self.progress_bench.set(0.85))
             time.sleep(0.5)
 
             # Stage 3: CPU Worker
-            self.after(0, lambda: self.lbl_bench_status.configure(text="Phase 3/3: Benchmarking CPU Multi-threaded Worker..."))
+            self._safe_after(0, lambda: self.lbl_bench_status.configure(text="Phase 3/3: Benchmarking CPU Multi-threaded Worker..."))
             cpu = CPUMiner(threads=4)
             t0 = time.perf_counter()
             cpu.search_batch(dummy_header, easy_target, epoch=0, start_nonce=0, count=4000)
             dt_cpu = time.perf_counter() - t0
             cpu_speed = 4000 / dt_cpu if dt_cpu > 0 else 0
             cpu_daily_usd = (cpu_speed / 100_000) * self.market_price_usdt * 2.0
-            self.after(0, lambda: (
+            self._safe_after(0, lambda: (
                 self.card_bench_cpu["hashrate"].configure(text=f"{cpu_speed / 1000:.2f} kH/s"),
                 self.card_bench_cpu["power"].configure(text="~25 W"),
                 self.card_bench_cpu["earnings"].configure(text=f"${cpu_daily_usd:.2f} / day")
             ))
 
-            self.after(0, lambda: self.progress_bench.set(1.0))
-            self.after(0, lambda: self.lbl_bench_status.configure(
+            self._safe_after(0, lambda: self.progress_bench.set(1.0))
+            self._safe_after(0, lambda: self.lbl_bench_status.configure(
                 text="✓ Benchmark Complete! Recommended: Pro Max Mode for maximum profit.", text_color="#10b981"
             ))
 
         except Exception as e:
-            self.after(0, lambda e=e: self.lbl_bench_status.configure(text=f"Benchmark error: {e}", text_color="#ef4444"))
+            self._safe_after(0, lambda e=e: self.lbl_bench_status.configure(text=f"Benchmark error: {e}", text_color="#ef4444"))
         finally:
             self.is_benchmarking = False
-            self.after(0, lambda: self.btn_run_benchmark.configure(state="normal", text="⚡  RUN FULL BENCHMARK NOW"))
+            self._safe_after(0, lambda: self.btn_run_benchmark.configure(state="normal", text="⚡  RUN FULL BENCHMARK NOW"))
 
     # =========================================================================
     # BACKGROUND TELEMETRY & NODE WATCHDOG
@@ -927,7 +1021,7 @@ class UrMinerApp(ctk.CTk):
             self.telemetry["ram"] = f"{ram_usage}%"
 
             # Update UI Telemetry Widgets
-            self.after(0, self._update_telemetry_ui)
+            self._safe_after(0, self._update_telemetry_ui)
 
             # 2. Query Node State & Live DEX Market
             try:
@@ -942,11 +1036,17 @@ class UrMinerApp(ctk.CTk):
                 tdata = self._rpc_call("/api/exchange/ticker", timeout=2)
                 self.market_price_usdt = tdata["last_price"]
 
-                self.after(0, lambda: self._update_node_status(True, self.node_height, self.confirmed_balance_urc, tdata))
+                # Orderbook Data
+                try:
+                    obdata = self._rpc_call("/api/exchange/orderbook?limit=6", timeout=2)
+                except Exception:
+                    obdata = {}
+
+                self._safe_after(0, lambda: self._update_node_status(True, self.node_height, self.confirmed_balance_urc, tdata, obdata))
 
             except Exception:
                 self.node_connected = False
-                self.after(0, lambda: self._update_node_status(False, 0, 0, {}))
+                self._safe_after(0, lambda: self._update_node_status(False, 0, 0, {}, {}))
 
             time.sleep(1.8)
 
@@ -961,11 +1061,16 @@ class UrMinerApp(ctk.CTk):
         self.tele_load.configure(text=self.telemetry["load"])
         self.tele_vram.configure(text=self.telemetry["vram"])
 
-    def _update_node_status(self, connected: bool, height: int, bal_urc: float, ticker: dict):
+    def _update_node_status(self, connected: bool, height: int, bal_urc: float, ticker: dict, orderbook: dict):
         if connected:
             self.lbl_node_indicator.configure(text="● NODE CONNECTED", text_color="#10b981")
             self.lbl_node_info.configure(text=f"Height: #{height} | Live DEX")
             self.btn_node_action.configure(state="disabled", text="Node Online")
+
+            # Update Dashboard Balance Card
+            self.lbl_dash_balance.configure(text=f"{bal_urc:.2f}")
+            bal_usd = bal_urc * self.market_price_usdt
+            self.lbl_dash_balance_usd.configure(text=f"≈ ${bal_usd:.2f} USDT")
 
             # Update DEX Tab
             if ticker:
@@ -975,22 +1080,37 @@ class UrMinerApp(ctk.CTk):
                 self.mkt_low.configure(text=f"${ticker.get('low_24h', p*0.95):.4f}")
                 self.mkt_vol.configure(text=f"{ticker.get('volume_urc_24h', 12500):.0f} URC")
 
-                quote_amt = self.entry_swap_amt.get().strip()
-                if quote_amt:
-                    try:
-                        out_usdt = float(quote_amt) * p
-                        self.lbl_swap_quote.configure(text=f"Estimated Output: ~{out_usdt:.2f} USDT (Rate: ${p:.4f})")
-                    except Exception:
-                        pass
+            # Update Orderbook Tables in Tab 4
+            if orderbook:
+                bids = orderbook.get("bids", [])
+                asks = orderbook.get("asks", [])
+                if bids:
+                    self.txt_bids.configure(state="normal")
+                    self.txt_bids.delete("1.0", "end")
+                    self.txt_bids.insert("end", f"{'PRICE (USDT)':<15} {'AMOUNT (URC)':<15} {'TOTAL':<10}\n")
+                    self.txt_bids.insert("end", "-" * 42 + "\n")
+                    for b in bids[:8]:
+                        self.txt_bids.insert("end", f"${b['price']:<14.4f} {b['amount']:<15.1f} ${b['total']:<10.2f}\n")
+                    self.txt_bids.configure(state="disabled")
+
+                if asks:
+                    self.txt_asks.configure(state="normal")
+                    self.txt_asks.delete("1.0", "end")
+                    self.txt_asks.insert("end", f"{'PRICE (USDT)':<15} {'AMOUNT (URC)':<15} {'TOTAL':<10}\n")
+                    self.txt_asks.insert("end", "-" * 42 + "\n")
+                    for a in asks[:8]:
+                        self.txt_asks.insert("end", f"${a['price']:<14.4f} {a['amount']:<15.1f} ${a['total']:<10.2f}\n")
+                    self.txt_asks.configure(state="disabled")
         else:
             self.lbl_node_indicator.configure(text="○ NODE OFFLINE", text_color="#ef4444")
             self.lbl_node_info.configure(text="Click to start node daemon")
-            self.btn_node_action.configure(state="normal", text="Launch Local Node")
+            self.btn_node_action.configure(state="normal", text="Start Local Node")
 
     def _launch_node_daemon(self):
         try:
-            cmd = [sys.executable, os.path.join(PROJECT_DIR, "urcoind.py")]
-            subprocess.Popen(cmd, creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0)
+            node_script = os.path.join(PROJECT_DIR, "urcoind.py")
+            cmd = [sys.executable, node_script]
+            self.node_process = subprocess.Popen(cmd, cwd=PROJECT_DIR, creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0)
             self._log("Launched Ur Coin Full Node daemon in background.")
         except Exception as e:
             self._log(f"Error launching node: {e}")
@@ -1035,6 +1155,7 @@ class UrMinerApp(ctk.CTk):
                 sw = res["swap"]
                 self._log(f"🎉 UrDEX Instant Swap: Sold {sw['amount_in']} URC -> Received ${sw['amount_out']:.2f} USDT!")
                 self.entry_swap_amt.delete(0, "end")
+                self._on_swap_amt_change()
             else:
                 self._log(f"Swap error: {res.get('error')}")
         except Exception as e:
